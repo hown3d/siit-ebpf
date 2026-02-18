@@ -1,0 +1,75 @@
+networks:
+  ipv6:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 2a05:b540:cadd::/64
+    enable_ipv4: false
+    enable_ipv6: true
+  ipv4: 
+    driver: bridge
+    enable_ipv4: true
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 10.255.0.0/16
+services:
+  tcpdump-discovery:
+    network_mode: host
+    image: nicolaka/netshoot
+    entrypoint:
+      - tcpdump
+      - -i 
+      - any
+      # neighbor solicitations
+      - 'arp or (icmp6 and ip6[40] = 135)'
+
+  tcpdump-net:
+    network_mode: host
+    image: nicolaka/netshoot
+    entrypoint:
+      - tcpdump
+      - -i 
+      - any
+      - 'net fe80:dead:beef::/96'
+  siit:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: nicolaka/netshoot
+    networks:
+      ipv6:
+        ipv6_address: 2a05:b540:cadd::2
+      ipv4:
+        ipv4_address: 10.255.0.2
+    privileged: true
+    user: root:root
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing 
+    command:
+    - -host-ipv4=10.255.0.2
+    - -host-ipv6=2a05:b540:cadd::2
+    - -pool=fe80:dead:beef::/96
+    - -ipv4=10.0.0.1
+    # nginx
+    - -ipv6=2a05:b540:cadd::4
+  pwru:
+    init: true
+    build:
+      context: https://github.com/cilium/pwru.git
+    privileged: true
+    tty: true
+    entrypoint: pwru
+    command:
+      - --filter-trace-tc
+      - "host 10.0.0.1 or host 2a05:b540:cadd::4 or net fe80:dead:beef::/96"
+    volumes:
+      - /sys/kernel/debug/:/sys/kernel/debug/
+    pid: host
+    network_mode: host
+
+  nginx:
+    networks:
+      ipv6:
+        ipv6_address: 2a05:b540:cadd::4
+    image: nginx

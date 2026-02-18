@@ -1,0 +1,6 @@
+-Iinternal/bpf/siit/include
+-O2
+-g
+--target=bpf
+-std=gnu99
+-nostdinc
