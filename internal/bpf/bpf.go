@@ -9,16 +9,18 @@ import (
 	"github.com/cilium/ebpf"
 	ebpflink "github.com/cilium/ebpf/link"
 	"github.com/go-logr/logr"
-	"github.com/hown3d/siit-ebpf/internal/link"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	"k8s.io/klog/v2"
 )
 
+const (
+	HostDevice       = "siit"
+	SecondHostDevice = "siit-peer"
+)
+
 type Manager struct {
 	log     logr.Logger
-	v6Link  netlink.Link
-	v4Link  netlink.Link
 	bpfObjs *siitObjects
 	// stores ip pairs for nat46
 	ip4Map *ipMap[bpfIP4, bpfIP6]
@@ -29,7 +31,6 @@ type Manager struct {
 func ensureClsact(links ...netlink.Link) error {
 	var err error
 	for _, l := range links {
-
 		clsact := netlink.Clsact{
 			QdiscAttrs: netlink.QdiscAttrs{
 				LinkIndex: l.Attrs().Index,
@@ -115,49 +116,61 @@ func upsertTCProgram(device netlink.Link, prog *ebpf.Program, progName string, p
 	return nil
 }
 
-func setupBpfVariables(vars *siitVariables, p netip.Prefix, v4Link, v6Link netlink.Link) error {
+func setupBpfVariables(vars *siitVariables, p netip.Prefix) error {
 	a16 := p.Addr().As16()
 	var variableErrs error
 	// write big endian here to ensure that we write in network order
 	variableErrs = errors.Join(variableErrs, vars.IPV6POOL_0.Set(binary.BigEndian.Uint32(a16[0:4])))
 	variableErrs = errors.Join(variableErrs, vars.IPV6POOL_1.Set(binary.BigEndian.Uint32(a16[4:8])))
 	variableErrs = errors.Join(variableErrs, vars.IPV6POOL_2.Set(binary.BigEndian.Uint32(a16[8:12])))
-	variableErrs = errors.Join(variableErrs, vars.IPV4IFINDEX.Set(uint32(v4Link.Attrs().Index)))
-	variableErrs = errors.Join(variableErrs, vars.IPV6IFINDEX.Set(uint32(v6Link.Attrs().Index)))
 	if variableErrs != nil {
 		return fmt.Errorf("assign variables to program: %w", variableErrs)
 	}
 	return nil
 }
 
-func NewManager(v4Link, v6Link netlink.Link, pool netip.Prefix) (*Manager, error) {
+var forbiddenPools = []netip.Prefix{
+	// reserved for ipv6 link local addresses
+	netip.MustParsePrefix("fe80::/10"),
+}
+
+func NewManager(pool netip.Prefix) (*Manager, error) {
 	if pool.Bits() != 96 {
 		return nil, errors.New("nat64Prefix must be /96")
+	}
+
+	for _, forbidden := range forbiddenPools {
+		if forbidden.Overlaps(pool) {
+			return nil, fmt.Errorf("cannot use pool %s as it overlaps with forbidden pool %s", pool, forbidden)
+		}
 	}
 
 	// load program into kernel
 	var objs siitObjects
 	opts := &ebpf.CollectionOptions{
 		Programs: ebpf.ProgramOptions{
-			LogLevel: (ebpf.LogLevelBranch | ebpf.LogLevelStats),
+			LogLevel: (ebpf.LogLevelBranch | ebpf.LogLevelStats | ebpf.LogLevelInstruction),
 		},
 	}
 	if err := loadSiitObjects(&objs, opts); err != nil {
+		var verifierErr *ebpf.VerifierError
+		if errors.As(err, &verifierErr) {
+			// print as %+v to get the full error log
+			return nil, fmt.Errorf("verifier error from kernel: %+v", verifierErr)
+		}
 		return nil, fmt.Errorf("loading program into kernel: %w", err)
 	}
 	bpfClose := func() error {
 		return objs.Close()
 	}
 
-	if err := setupBpfVariables(&objs.siitVariables, pool, v4Link, v6Link); err != nil {
+	if err := setupBpfVariables(&objs.siitVariables, pool); err != nil {
 		defer bpfClose()
 		return nil, err
 	}
 
 	return &Manager{
 		log:     klog.NewKlogr().WithName("manager"),
-		v6Link:  v6Link,
-		v4Link:  v4Link,
 		bpfObjs: &objs,
 		ip6Map:  newIP6Map(objs.Ipv6AddressMappings),
 		ip4Map:  newIP4Map(objs.Ipv4AddressMappings),
@@ -169,28 +182,23 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) SetupLinks() error {
-	v4LinkName := m.v4Link.Attrs().Name
-	v6LinkName := m.v6Link.Attrs().Name
+	hostDev, peerDev, err := setupBaseDevice()
+	if err != nil {
+		return err
+	}
 
-	if err := ensureClsact(m.v4Link, m.v6Link); err != nil {
+	if err := ensureClsact(hostDev, peerDev); err != nil {
 		return fmt.Errorf("ensuring clsact qdiscs on links: %w", err)
 	}
 
-	klog.Infof("adding eBPF siit prog to the interface %s", v6LinkName)
-	if err := attachProgToFilter(m.v6Link, m.bpfObjs.Siit); err != nil {
-		return fmt.Errorf("attaching nat64 program to interface %s: %w", v6LinkName, err)
+	for _, l := range []netlink.Link{hostDev, peerDev} {
+		klog.Infof("adding eBPF siit prog to the interface %s", l.Attrs().Name)
+		if err := attachProgToFilter(l, m.bpfObjs.Siit); err != nil {
+			return fmt.Errorf("error attaching program to interface %s: %w", l.Attrs().Name, err)
+		}
 	}
 
-	klog.Infof("adding eBPF siit prog to the interface %s", v4LinkName)
-	if err := attachProgToFilter(m.v4Link, m.bpfObjs.Siit); err != nil {
-		return fmt.Errorf("attaching nat46 program to interface %s: %w", v4LinkName, err)
-	}
-
-	// set the interface up if necessary
-	var err error
-	err = errors.Join(err, link.EnsureUp(m.v4Link))
-	err = errors.Join(err, link.EnsureUp(m.v6Link))
-	return err
+	return nil
 }
 
 type Entry struct {

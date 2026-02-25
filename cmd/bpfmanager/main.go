@@ -11,16 +11,12 @@ import (
 
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/hown3d/siit-ebpf/internal/bpf"
-	"github.com/hown3d/siit-ebpf/internal/link"
 )
 
 var (
 	ipv4 = flag.String("ipv4", "", "ipv4 address to map to ipv6")
 	ipv6 = flag.String("ipv6", "", "ipv6 address")
 	pool = flag.String("pool", "", "pool used for address translation")
-
-	hostIPv4 = flag.String("host-ipv4", "", "ipv4 addr of the device used for siit46")
-	hostIPv6 = flag.String("host-ipv6", "", "ipv6 addr of the device used for siit64")
 )
 
 func main() {
@@ -33,17 +29,7 @@ func main() {
 
 	pool := netip.MustParsePrefix(*pool)
 
-	v4Link, err := link.FindWithAddress(netip.MustParseAddr(*hostIPv4))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	v6Link, err := link.FindWithAddress(netip.MustParseAddr(*hostIPv6))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	manager, err := bpf.NewManager(v4Link, v6Link, pool)
+	manager, err := bpf.NewManager(pool)
 	if err != nil {
 		log.Fatal(err)
 	}

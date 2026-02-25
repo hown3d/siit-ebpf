@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+#include "bpf/bpf_endian.h"
 #include "filter_config.h"
 #include "helpers/csum.h"
 #include "linux/icmp.h"
@@ -48,6 +49,10 @@ limitations under the License.
 
 #define PACKET_HOST 0
 #define DEFAULT_MTU 1500
+
+#define AF_INET 2
+#define AF_INET6 10
+#define IPV6_FLOWINFO_MASK bpf_htonl(0x0FFFFFFF)
 
 #define DEBUG 1 // Define DEBUG as 1 for debug mode, 0 for production
 
@@ -705,15 +710,18 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
 // destination address is calculated by looking up the ipv4 destination in
 // ipv4_address_mappings map source address is the IPv4 src address embedded in
 // IPV6_POOL prefix prefix
-static __always_inline int ip4_to_ip6(struct __sk_buff *skb,
-                                      const int ip_offset) {
+static __always_inline int
+ip4_to_ip6(struct __sk_buff *skb, struct ipv6hdr *ip6, const int ip_offset) {
   struct iphdr ip4 = {};
-  struct ipv6hdr ip6 = {};
   int ret = 0;
   __wsum pseudohdr_csum = 0;
   int l4_offset = 0;
   __wsum l4_csum_diff = 0;
   const __be16 ethtype = bpf_htons(ETH_P_IPV6);
+
+  if (ip6 == NULL) {
+    return IP_UNDEFINED;
+  }
 
   ret = bpf_skb_load_bytes(skb, ip_offset, &ip4, sizeof(struct iphdr));
   if (ret < 0) {
@@ -738,24 +746,24 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb,
 
   // Zero assignments are here for readability, the entire struct is
   // already memset to 0, so they're not necessary.
-  ip6.version = 6;
-  ip6.priority = ip4.tos >> 4;
-  ip6.payload_len = bpf_htons(bpf_ntohs(ip4.tot_len) - 20);
-  ip6.hop_limit = ip4.ttl;
-  ip6.nexthdr = (ip4.protocol == IPPROTO_ICMP) ? IPPROTO_ICMPV6 : ip4.protocol;
+  ip6->version = 6;
+  ip6->priority = ip4.tos >> 4;
+  ip6->payload_len = bpf_htons(bpf_ntohs(ip4.tot_len) - 20);
+  ip6->hop_limit = ip4.ttl;
+  ip6->nexthdr = (ip4.protocol == IPPROTO_ICMP) ? IPPROTO_ICMPV6 : ip4.protocol;
 
   // TODO: what is the flow label
-  ip6.flow_lbl[0] = (__u8)((ip4.tos & 0xF) << 4);
-  ip6.flow_lbl[1] = 0;
-  ip6.flow_lbl[2] = 0;
+  ip6->flow_lbl[0] = (__u8)((ip4.tos & 0xF) << 4);
+  ip6->flow_lbl[1] = 0;
+  ip6->flow_lbl[2] = 0;
 
   // setup source address to contain siit prefix
-  ip6.saddr.in6_u.u6_addr32[0] = bpf_htonl(IPV6_POOL_0);
-  ip6.saddr.in6_u.u6_addr32[1] = bpf_htonl(IPV6_POOL_1);
-  ip6.saddr.in6_u.u6_addr32[2] = bpf_htonl(IPV6_POOL_2);
-  ip6.saddr.in6_u.u6_addr32[3] = ip4.saddr;
+  ip6->saddr.in6_u.u6_addr32[0] = bpf_htonl(IPV6_POOL_0);
+  ip6->saddr.in6_u.u6_addr32[1] = bpf_htonl(IPV6_POOL_1);
+  ip6->saddr.in6_u.u6_addr32[2] = bpf_htonl(IPV6_POOL_2);
+  ip6->saddr.in6_u.u6_addr32[3] = ip4.saddr;
 
-  ip6.daddr = *new_dst;
+  ip6->daddr = *new_dst;
 
   // This also takes care of resizing socket buffer to handle different IP
   // header size.
@@ -774,11 +782,11 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb,
   // See comment for IP6->IP4 direction for reasoning behind this.
   l4_csum_diff =
       bpf_csum_diff((void *)&(ip4.saddr), 2 * sizeof(__u32),
-                    (void *)&(ip6.saddr), 2 * sizeof(struct in6_addr), 0);
+                    (void *)&(ip6->saddr), 2 * sizeof(struct in6_addr), 0);
 
-  switch (ip6.nexthdr) {
+  switch (ip6->nexthdr) {
   case IPPROTO_ICMPV6:
-    pseudohdr_csum = ip6_pseudohdr_csum(&ip6);
+    pseudohdr_csum = ip6_pseudohdr_csum(ip6);
     ret = icmp4_to_icmp6(skb, l4_offset, pseudohdr_csum);
     if (ret < 0) {
       switch (ret) {
@@ -826,7 +834,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb,
     break;
   default:
 #ifdef DEBUG
-    bpf_printk("IP4->IP6: protocol not supported: %d", ip6.nexthdr);
+    bpf_printk("IP4->IP6: protocol not supported: %d", ip6->nexthdr);
 #endif
     return IP_NOT_SUPPORTED;
   }
@@ -834,7 +842,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb,
   // Copy over the new IPv6 header.
   // This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE
   // packet.
-  ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), &ip6,
+  ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), ip6,
                             sizeof(struct ipv6hdr), BPF_F_RECOMPUTE_CSUM);
   if (ret < 0) {
 #ifdef DEBUG
@@ -844,8 +852,8 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb,
   }
 
 #ifdef DEBUG
-  bpf_printk("IP4->IP6 packet: saddr: %pI6, daddr: %pI6", &ip6.saddr,
-             &ip6.daddr);
+  bpf_printk("IP4->IP6 packet: saddr: %pI6, daddr: %pI6", &ip6->saddr,
+             &ip6->daddr);
 #endif
   return IP_OK;
 }
@@ -862,21 +870,17 @@ static bool __always_inline valid(struct __sk_buff *skb) {
 
 static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   int ret = 0;
-  __u32 redirect_ifindex = skb->ifindex;
-#ifdef DEBUG
-  bpf_printk("SIIT: received packet to translate on ifindex %d",
-             redirect_ifindex);
-#endif
-  switch (bpf_htons(skb->protocol)) {
+  struct ipv6hdr ip6 = {};
+  int ip_offset = sizeof(struct ethhdr);
+  int protocol = bpf_htons(skb->protocol);
+  switch (protocol) {
   case ETH_P_IP:
     eth.h_proto = bpf_htons(ETH_P_IPV6);
-    ret = ip4_to_ip6(skb, sizeof(struct ethhdr));
-    redirect_ifindex = IPV6_IFINDEX;
+    ret = ip4_to_ip6(skb, &ip6, ip_offset);
     break;
   case ETH_P_IPV6:
     eth.h_proto = bpf_htons(ETH_P_IP);
     ret = ip6_to_ip4(skb, sizeof(struct ethhdr));
-    redirect_ifindex = IPV4_IFINDEX;
     break;
   }
   if (ret < 0) {
@@ -900,6 +904,53 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     }
   }
 
+  struct bpf_fib_lookup fib_params = {};
+  struct in6_addr *src = (struct in6_addr *)fib_params.ipv6_src;
+  struct in6_addr *dst = (struct in6_addr *)fib_params.ipv6_dst;
+
+  switch (protocol) {
+  case ETH_P_IP:
+    *src = ip6.saddr;
+    *dst = ip6.daddr;
+    fib_params.family = AF_INET6;
+    fib_params.sport = 0;
+    fib_params.dport = 0;
+    fib_params.l4_protocol = ip6.nexthdr;
+    fib_params.tot_len = bpf_ntohs(ip6.payload_len);
+    fib_params.flowinfo = *(__be32 *)(&ip6) & IPV6_FLOWINFO_MASK;
+    fib_params.ifindex = skb->ifindex;
+    break;
+  case ETH_P_IPV6:
+    break;
+  default:
+    break;
+  }
+  // __u32 fib_flags = BPF_FIB_LOOKUP_DIRECT & BPF_FIB_LOOKUP_OUTPUT;
+  __u32 fib_flags = BPF_FIB_LOOKUP_OUTPUT;
+  ret = bpf_fib_lookup(skb, &fib_params, sizeof(fib_params), fib_flags);
+  if (ret < 0) {
+#ifdef DEBUG
+    bpf_printk("fib lookup errored, got code %d", ret);
+#endif
+    return TC_ACT_OK;
+  }
+  switch (ret) {
+  case BPF_FIB_LKUP_RET_SUCCESS: /* lookup successful */
+    // __builtin_memcpy(&eth.h_dest, fib_params.dmac, ETH_ALEN);
+    // __builtin_memcpy(&eth.h_source, fib_params.smac, ETH_ALEN);
+    break;
+  default:
+#ifdef DEBUG
+    /*
+     * BPF_FIB_LKUP_RET_FWD_DISABLED:
+     *  The bpf_fib_lookup respect sysctl net.ipv{4,6}.conf.all.forwarding
+     *  setting, and will return BPF_FIB_LKUP_RET_FWD_DISABLED if not
+     *  enabled this on ingress device.
+     */
+    bpf_printk("fib lookup was not successfull, got code %d", ret);
+#endif
+  }
+
   // Copy over the ethernet header with updated ethertype.
   ret = bpf_skb_store_bytes(skb, 0, &eth, sizeof(struct ethhdr), 0);
   if (ret < 0) {
@@ -909,17 +960,21 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     return TC_ACT_SHOT;
   }
 
-#ifdef DEBUG
-  bpf_printk("SIIT finished. Redirecting to interface index %d",
-             redirect_ifindex);
-#endif
-
-  // redirect to egress
-  // TODO: without neigh the l2 addresses won't be correct.
+  // TODO:
   // Returning packets however don't have the correct ip as destination
   // e.g. [2a05:b540:cadd::4]:0->[fe80::4a2:ebff:fe27:a8b] which is the ipv6
   // of the container running the filters
-  return bpf_redirect_neigh(redirect_ifindex, NULL, 0, 0);
+  if (fib_params.ifindex != skb->ifindex) {
+    // redirect to egress
+#ifdef DEBUG
+    bpf_printk("fib lookup returned different interface. Redirecting to "
+               "interface index %d, recieved on interface index %d",
+               fib_params.ifindex, skb->ifindex);
+#endif
+    return bpf_redirect(fib_params.ifindex, 0);
+  }
+
+  return TC_ACT_OK;
 }
 
 SEC("tc")

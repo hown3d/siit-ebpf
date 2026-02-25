@@ -3,6 +3,7 @@
 package bpf
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/hown3d/siit-ebpf/internal/bpf/testutil"
+	"github.com/hown3d/siit-ebpf/internal/netns"
 	"github.com/vishvananda/netlink"
 )
 
@@ -26,19 +28,7 @@ func TestManager_Siit46(t *testing.T) {
 		t.Fatalf("creating kernel trace reader: %s", err)
 	}
 
-	v4Link := &netlink.Dummy{
-		LinkAttrs: netlink.LinkAttrs{
-			Index: 1,
-		},
-	}
-
-	v6Link := &netlink.Dummy{
-		LinkAttrs: netlink.LinkAttrs{
-			Index: 2,
-		},
-	}
-
-	m, err := NewManager(v4Link, v6Link, testPrefix)
+	m, err := NewManager(testPrefix)
 	if err != nil {
 		t.Fatalf("setup ebpf manager: %s", err)
 	}
@@ -68,10 +58,73 @@ func TestManager_Siit46(t *testing.T) {
 		t.Fatalf("building ipv4 packet: %s", err)
 	}
 
-	ret, outData, err := m.bpfObjs.Siit.Test(in)
+	ns, err := netns.New()
 	if err != nil {
-		t.Fatalf("testing ebpf program: %s", err)
+		t.Fatalf("creating network namespace: %s", err)
 	}
+
+	v4Link := &netlink.Bridge{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: "v4",
+		},
+	}
+
+	v6Link := &netlink.Bridge{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: "v6",
+		},
+	}
+
+	var (
+		outData []byte
+		ret     uint32
+	)
+	if err := ns.Do(
+		func() error {
+			if err := m.SetupLinks(); err != nil {
+				return err
+			}
+			if err := setupTestLink(v4Link); err != nil {
+				return fmt.Errorf("setup v4 link: %w", err)
+			}
+			if err := setupTestLink(v6Link); err != nil {
+				return fmt.Errorf("setup v6 link: %w", err)
+			}
+
+			v6Route := &netlink.Route{
+				Family:    netlink.FAMILY_V6,
+				LinkIndex: v6Link.Index,
+				Dst: &net.IPNet{
+					IP:   testPrefix.Addr().AsSlice(),
+					Mask: net.CIDRMask(testPrefix.Bits(), testPrefix.Addr().BitLen()),
+				},
+			}
+			t.Logf("setup v6 route: %s", v6Route)
+			if err := netlink.RouteAdd(v6Route); err != nil {
+				return fmt.Errorf("setup v6 route: %w", err)
+			}
+
+			if err := logRoutes(t, netlink.FAMILY_V6); err != nil {
+				return fmt.Errorf("logging ipv6 routes: %w", err)
+			}
+
+			if err := logRoutes(t, netlink.FAMILY_V4); err != nil {
+				return fmt.Errorf("logging ipv6 routes: %w", err)
+			}
+
+			ret, outData, err = m.bpfObjs.Siit.Test(in)
+			if err != nil {
+				t.Fatalf("testing ebpf program: %s", err)
+			}
+
+			return nil
+		}); err != nil {
+		t.Fatalf("setup links in network namespace: %s", err)
+	}
+
+	t.Cleanup(func() {
+		ns.Close()
+	})
 
 	traces, err := io.ReadAll(kernelTraceReader)
 	if err != nil {
@@ -183,4 +236,26 @@ func ipv6Packet(src, dst netip.Addr) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func setupTestLink(l netlink.Link) error {
+	if err := netlink.LinkAdd(l); err != nil {
+		return err
+	}
+	if err := netlink.LinkSetUp(l); err != nil {
+		return fmt.Errorf("failed to set link up: %w", err)
+	}
+
+	return enableForwarding(l)
+}
+
+func logRoutes(t *testing.T, family int) error {
+	routes, err := netlink.RouteList(nil, family)
+	if err != nil {
+		return err
+	}
+	for _, r := range routes {
+		t.Logf("route %s", r)
+	}
+	return nil
 }

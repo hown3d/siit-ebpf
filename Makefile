@@ -33,3 +33,9 @@ generate-linux-headers:
 	cp -R /tmp/linux/usr/include/linux/ $(INCLUDE_FOLDER)/linux-headers
 	# cp -R /tmp/linux/usr/include/asm-generic $(INCLUDE_FOLDER)
 	rm -r linuxkit
+
+up:
+	docker compose up
+
+down:
+	docker compose down --timeout 300
