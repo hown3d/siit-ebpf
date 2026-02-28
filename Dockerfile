@@ -14,7 +14,7 @@ RUN go mod download
 
 FROM deps as builder
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o manager ./cmd/bpfmanager
+RUN GOARCH=${TARGETARCH} make build
 
 FROM base
 COPY --from=builder /work/manager /manager

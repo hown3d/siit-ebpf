@@ -6,7 +6,22 @@ go-generate:
 	docker build -t siit-ebpf-deps --target deps .
 	docker run -ti -v $(PWD):/work -w /work siit-ebpf-deps go generate ./...
 
+build:
+	CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o manager ./cmd/bpfmanager/ 
 
+run:
+	./manager -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2
+
+run-netns:
+	ip netns exec ns_router $(MAKE) run
+
+
+pcap = 'net 64:ff9b:dead:beef::/96 or host 10.0.0.5 or host 10.0.0.2 or host 10.0.0.254 or net fd00::/32'
+tcpdump:
+	tcpdump -i any -nnvvvttt $(pcap)
+
+pwru:
+	./hack/pwru.sh --filter-trace-tc $(pcap)
 
 ebpf-test:
 	docker run --privileged -v $(shell go env GOMODCACHE):/go/pkg/mod -v $(PWD):/src -v /sys/kernel/tracing:/sys/kernel/tracing:rw -w /src golang go test -v ./internal/bpf/...
@@ -35,7 +50,20 @@ generate-linux-headers:
 	rm -r linuxkit
 
 up:
-	docker compose up
+	docker compose up --build
+
+up-server:
+	ip netns exec ns_server python3 -m http.server 80 --bind ::
+
+nc-client:
+	ip netns exec ns_client curl -vvv 10.0.0.5:80
+
+setup-routes:
+	./hack/setup-routes.sh --pool 64:ff9b:dead:beef::/96 --ipv4 10.0.0.5 || true
+
+remove-routes:
+	./hack/setup-routes.sh --delete
 
 down:
 	docker compose down --timeout 300
+

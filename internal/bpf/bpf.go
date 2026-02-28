@@ -164,6 +164,7 @@ func NewManager(pool netip.Prefix) (*Manager, error) {
 		return objs.Close()
 	}
 
+	// TODO: route pool to siit device
 	if err := setupBpfVariables(&objs.siitVariables, pool); err != nil {
 		defer bpfClose()
 		return nil, err
@@ -207,6 +208,7 @@ type Entry struct {
 }
 
 func (m *Manager) AddEntry(e Entry) error {
+	// TODO: setup routes to route ipv4 to siit device
 	m.log.Info("adding entry", "ipv4", e.IPv4, "ipv6", e.IPv6)
 	var err error
 	err = errors.Join(err, m.ip4Map.Add(e.IPv4, e.IPv6))

@@ -77,21 +77,37 @@ struct {
   __uint(max_entries, ADDRESS_MAPPINGS_MAP_ELEMS);
 } ipv6_address_mappings SEC(".maps");
 
+/* from include/net/ip.h */
+static __always_inline int ip_decrease_ttl(struct iphdr *iph) {
+  u32 check = (__u32)iph->check;
+
+  check += (__u32)bpf_htons(0x0100);
+  iph->check = (__sum16)(check + (check >= 0xFFFF));
+  return --iph->ttl;
+}
+
 static __always_inline bool siit64_valid(const struct __sk_buff *skb) {
   const void *data = (void *)(long)skb->data;
   const void *data_end = (void *)(long)skb->data_end;
 
   // Require ethernet dst mac address to be our unicast address.
-  if (skb->pkt_type != PACKET_HOST)
-    return false;
+  // TODO: hown3d, check if we need this
+  // if (skb->pkt_type != PACKET_HOST) {
+  //   bpf_printk("SIIT64 packet: packet type not host, got %d", skb->pkt_type);
+  //   return false;
+  // }
 
   // Must be meta-ethernet IPv6 frame.
-  if (skb->protocol != bpf_htons(IPPROTO_IPV6))
+  if (skb->protocol != bpf_htons(ETH_P_IPV6)) {
+    bpf_printk("SIIT64 packet: protocol not ETH_P_IPV6, got %d", skb->protocol);
     return false;
+  }
 
   // Must have (ethernet and) ipv6 header.
-  if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) > data_end)
+  if (data + sizeof(struct ethhdr) + sizeof(struct ipv6hdr) > data_end) {
+    bpf_printk("SIIT64 packet: does not contain eth and ipv6 hdr");
     return false;
+  }
 
   const struct ethhdr *eth = data;
 
@@ -100,10 +116,6 @@ static __always_inline bool siit64_valid(const struct __sk_buff *skb) {
     return false;
 
   const struct ipv6hdr *ip6 = (void *)(eth + 1);
-#ifdef DEBUG
-  bpf_printk("SIIT64 packet: saddr: %pI6, daddr: %pI6", &ip6->saddr,
-             &ip6->daddr);
-#endif
 
   // IP version must be 6.
   if (ip6->version != 6)
@@ -151,6 +163,8 @@ static __always_inline bool siit64_valid(const struct __sk_buff *skb) {
 #endif
     return false;
   }
+  bpf_printk("SIIT64 packet: saddr: %pI6, daddr: %pI6", &ip6->saddr,
+             &ip6->daddr);
 
   return true;
 }
@@ -206,10 +220,10 @@ static __always_inline bool siit46_valid(const struct __sk_buff *skb) {
   //   sum4 += ((__u16 *)ip4)[i];
   //
   // // Note that sum4 is guaranteed to be non-zero by virtue of ip4->version ==
-  // 4 sum4 = (sum4 & 0xFFFF) + (sum4 >> 16); // collapse u32 into range 1 ..
-  // 0x1FFFE sum4 =
-  //     (sum4 & 0xFFFF) + (sum4 >> 16); // collapse any potential carry into
-  //     u16
+  // 4 sum4 = (sum4 & 0xFFFF) + (sum4 >> 16);
+  // // collapse u32 into range 1 .. 0x1FFFE
+  // sum4 = (sum4 & 0xFFFF) + (sum4 >> 16);
+  // collapse any potential carry int u16
   //
   // For a correct checksum we should get *a* zero, but sum4 must be positive,
   // ie 0xFFFF
@@ -527,10 +541,9 @@ icmp4_to_icmp6(struct __sk_buff *skb, int icmp_offset, __wsum pseudohdr_csum) {
 // dst IPv6 address.
 // Use as source address the ipv4 value present in the ipv6_address_mappings map
 // for the dst address
-static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
+static __always_inline int ip6_to_ip4(struct __sk_buff *skb, struct iphdr *ip4,
                                       const int ip_offset) {
   struct ipv6hdr ip6 = {};
-  struct iphdr ip4 = {};
   int ret = 0;
   __be16 tot_len = 0;
   int l4_offset = 0;
@@ -538,6 +551,9 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
   __wsum l4_csum_diff = 0;
   const __be16 ethtype = bpf_htons(ETH_P_IP);
   struct in_addr *ip4_src_addr;
+
+  if (ip4 == NULL)
+    return IP_UNDEFINED;
 
   ret = bpf_skb_load_bytes(skb, ip_offset, &ip6, sizeof(struct ipv6hdr));
   if (ret < 0) {
@@ -549,12 +565,12 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
 
   tot_len = bpf_htons(bpf_ntohs(ip6.payload_len) + sizeof(struct iphdr));
 
-  ip4.version = 4;
-  ip4.ihl = sizeof(struct iphdr) / sizeof(__u32);
-  ip4.tos = (__u8)((ip6.priority << 4) + (ip6.flow_lbl[0] >> 4));
-  ip4.tot_len = tot_len;
-  ip4.ttl = ip6.hop_limit;
-  ip4.protocol = (ip6.nexthdr == IPPROTO_ICMPV6) ? IPPROTO_ICMP : ip6.nexthdr;
+  ip4->version = 4;
+  ip4->ihl = sizeof(struct iphdr) / sizeof(__u32);
+  ip4->tos = (__u8)((ip6.priority << 4) + (ip6.flow_lbl[0] >> 4));
+  ip4->tot_len = tot_len;
+  ip4->ttl = ip6.hop_limit;
+  ip4->protocol = (ip6.nexthdr == IPPROTO_ICMPV6) ? IPPROTO_ICMP : ip6.nexthdr;
 
   // find the ipv4 pair for the ipv6 address in the bpf map
   ip4_src_addr = bpf_map_lookup_elem(&ipv6_address_mappings, &ip6.saddr);
@@ -565,22 +581,17 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
     return IP_ERROR;
   }
 
-  ip4.saddr = ip4_src_addr->s_addr;
+  ip4->saddr = ip4_src_addr->s_addr;
   // Extract IPv4 address from the last 4 bytes of IPv6 address.
-  ip4.daddr = ip6.daddr.in6_u.u6_addr32[3];
+  ip4->daddr = ip6.daddr.in6_u.u6_addr32[3];
 
   // https://mailarchive.ietf.org/arch/msg/behave/JfxCt1fGT66pEtfXKuEDJ8rdd7w/
-  if (bpf_ntohs(ip4.tot_len) > 1280)
-    ip4.frag_off = bpf_htons(IP_DF);
+  if (bpf_ntohs(ip4->tot_len) > 1280)
+    ip4->frag_off = bpf_htons(IP_DF);
 
   // TODO: see if BPF_F_RECOMPUTE_CSUM lets us skip this
-  __wsum sum4 = 0;
-  for (size_t i = 0; i < sizeof(struct iphdr) / sizeof(__u16); ++i) {
-    sum4 += ((__u16 *)&ip4)[i];
-  }
-  sum4 = (sum4 & 0xFFFF) + (sum4 >> 16);
-  sum4 = (sum4 & 0xFFFF) + (sum4 >> 16);
-  ip4.check = (__u16)~sum4;
+  calc_ipv4_csum(ip4);
+  bpf_printk("Calculated IPv4 csum: %x\n", ip4->check);
 
   // This also takes care of resizing socket buffer to handle different IP
   // header size.
@@ -630,11 +641,13 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
   // next to each other in memory. That means we can
   // calculate checksum difference with one bpf_csum_diff
   // call using 2 * size of IP address.
-  l4_csum_diff =
-      bpf_csum_diff((void *)&(ip6.saddr), 2 * sizeof(struct in6_addr),
-                    (void *)&(ip4.saddr), 2 * sizeof(__u32), 0);
+  // l4_csum_diff =
+  //     bpf_csum_diff((void *)&(ip6.saddr), 2 * sizeof(struct in6_addr),
+  //                   (void *)&(ip4->saddr), 2 * sizeof(__u32), 0);
+  //
+  l4_csum_diff = ip6_to_ip4_csum_diff(skb, &ip6, ip4);
 
-  switch (ip4.protocol) {
+  switch (ip4->protocol) {
   case IPPROTO_ICMP:
     pseudohdr_csum = ip6_pseudohdr_csum(&ip6);
     ret = icmp6_to_icmp4(skb, l4_offset, pseudohdr_csum);
@@ -660,9 +673,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
     }
     break;
   case IPPROTO_UDP:
-    ret = bpf_l4_csum_replace(skb, l4_offset + offsetof(struct udphdr, check),
-                              0, l4_csum_diff,
-                              BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0);
+    ret = udp_csum_replace(skb, l4_csum_diff, ip_offset);
     if (ret < 0) {
 #ifdef DEBUG
       bpf_printk("IP6->IP4: UDP checksum replace failed with code: %d", ret);
@@ -671,8 +682,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
     }
     break;
   case IPPROTO_TCP:
-    ret = bpf_l4_csum_replace(skb, l4_offset + offsetof(struct tcphdr, check),
-                              0, l4_csum_diff, BPF_F_PSEUDO_HDR);
+    ret = tcp_csum_replace(skb, l4_csum_diff, ip_offset);
     if (ret < 0) {
 #ifdef DEBUG
       bpf_printk("IP6->IP4: TCP checksum replace failed with code: %d", ret);
@@ -682,26 +692,14 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb,
     break;
   default:
 #ifdef DEBUG
-    bpf_printk("IP6->IP4: protocol not supported: %d", ip4.protocol);
+    bpf_printk("IP6->IP4: protocol not supported: %d", ip4->protocol);
 #endif
     return IP_NOT_SUPPORTED;
   }
 
-  // Copy over the new IPv4 header.
-  // This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE
-  // packet.
-  // TODO: change to BPF_F_RECOMPUTE_CSUM
-  ret = bpf_skb_store_bytes(skb, ip_offset, &ip4, sizeof(struct iphdr), 0);
-  if (ret < 0) {
 #ifdef DEBUG
-    bpf_printk("IP6->IP4: bpf_skb_store_bytes failed with code: %d", ret);
-#endif
-    return IP_ERROR;
-  }
-
-#ifdef DEBUG
-  bpf_printk("IP6->IP4 packet: saddr: %pI4, daddr: %pI4", &ip4.saddr,
-             &ip4.daddr);
+  bpf_printk("IP6->IP4 packet: saddr: %pI4, daddr: %pI4", &ip4->saddr,
+             &ip4->daddr);
 #endif
   return IP_OK;
 }
@@ -780,9 +778,7 @@ ip4_to_ip6(struct __sk_buff *skb, struct ipv6hdr *ip6, const int ip_offset) {
   l4_offset = ip_offset + sizeof(struct ipv6hdr);
 
   // See comment for IP6->IP4 direction for reasoning behind this.
-  l4_csum_diff =
-      bpf_csum_diff((void *)&(ip4.saddr), 2 * sizeof(__u32),
-                    (void *)&(ip6->saddr), 2 * sizeof(struct in6_addr), 0);
+  l4_csum_diff = ip4_to_ip6_csum_diff(skb, &ip4, ip6);
 
   switch (ip6->nexthdr) {
   case IPPROTO_ICMPV6:
@@ -811,9 +807,7 @@ ip4_to_ip6(struct __sk_buff *skb, struct ipv6hdr *ip6, const int ip_offset) {
 
     break;
   case IPPROTO_UDP:
-    ret = bpf_l4_csum_replace(skb, l4_offset + offsetof(struct udphdr, check),
-                              0, l4_csum_diff,
-                              BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0);
+    ret = udp_csum_replace(skb, l4_csum_diff, ip_offset);
     if (ret < 0) {
 #ifdef DEBUG
       bpf_printk("IP4->IP6: UDP checksum replace failed with code: %d", ret);
@@ -822,6 +816,7 @@ ip4_to_ip6(struct __sk_buff *skb, struct ipv6hdr *ip6, const int ip_offset) {
     }
     break;
   case IPPROTO_TCP:
+    ret = tcp_csum_replace(skb, l4_csum_diff, ip_offset);
     ret = bpf_l4_csum_replace(skb, l4_offset + offsetof(struct tcphdr, check),
                               0, l4_csum_diff, BPF_F_PSEUDO_HDR);
     if (ret < 0) {
@@ -839,18 +834,6 @@ ip4_to_ip6(struct __sk_buff *skb, struct ipv6hdr *ip6, const int ip_offset) {
     return IP_NOT_SUPPORTED;
   }
 
-  // Copy over the new IPv6 header.
-  // This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE
-  // packet.
-  ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), ip6,
-                            sizeof(struct ipv6hdr), BPF_F_RECOMPUTE_CSUM);
-  if (ret < 0) {
-#ifdef DEBUG
-    bpf_printk("IP4->IP6: bpf_skb_store_bytes failed with code: %d", ret);
-#endif
-    return IP_ERROR;
-  }
-
 #ifdef DEBUG
   bpf_printk("IP4->IP6 packet: saddr: %pI6, daddr: %pI6", &ip6->saddr,
              &ip6->daddr);
@@ -861,26 +844,36 @@ ip4_to_ip6(struct __sk_buff *skb, struct ipv6hdr *ip6, const int ip_offset) {
 static bool __always_inline valid(struct __sk_buff *skb) {
   switch (bpf_htons(skb->protocol)) {
   case ETH_P_IP:
+#ifdef DEBUG
+    bpf_printk("recieved ipv4 packet, checking validity", skb->protocol);
+#endif
     return siit46_valid(skb);
   case ETH_P_IPV6:
+#ifdef DEBUG
+    bpf_printk("recieved ipv6 packet, checking validity", skb->protocol);
+#endif
     return siit64_valid(skb);
   };
+#ifdef DEBUG
+  bpf_printk("unknown protocol %d", skb->protocol);
+#endif
+
   return false;
 }
 
 static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   int ret = 0;
   struct ipv6hdr ip6 = {};
+  struct iphdr ip4 = {};
   int ip_offset = sizeof(struct ethhdr);
-  int protocol = bpf_htons(skb->protocol);
-  switch (protocol) {
+  switch (bpf_htons(skb->protocol)) {
   case ETH_P_IP:
     eth.h_proto = bpf_htons(ETH_P_IPV6);
     ret = ip4_to_ip6(skb, &ip6, ip_offset);
     break;
   case ETH_P_IPV6:
     eth.h_proto = bpf_htons(ETH_P_IP);
-    ret = ip6_to_ip4(skb, sizeof(struct ethhdr));
+    ret = ip6_to_ip4(skb, &ip4, sizeof(struct ethhdr));
     break;
   }
   if (ret < 0) {
@@ -905,28 +898,36 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   }
 
   struct bpf_fib_lookup fib_params = {};
-  struct in6_addr *src = (struct in6_addr *)fib_params.ipv6_src;
-  struct in6_addr *dst = (struct in6_addr *)fib_params.ipv6_dst;
+  fib_params.sport = 0;
+  fib_params.dport = 0;
+  // fib_params.ifindex = skb->ingress_ifindex;
+  fib_params.ifindex = skb->ifindex;
 
-  switch (protocol) {
-  case ETH_P_IP:
+  // use if else to allow instantiation inside block
+  if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
+    struct in6_addr *src = (struct in6_addr *)fib_params.ipv6_src;
+    struct in6_addr *dst = (struct in6_addr *)fib_params.ipv6_dst;
+
     *src = ip6.saddr;
     *dst = ip6.daddr;
     fib_params.family = AF_INET6;
-    fib_params.sport = 0;
-    fib_params.dport = 0;
     fib_params.l4_protocol = ip6.nexthdr;
     fib_params.tot_len = bpf_ntohs(ip6.payload_len);
     fib_params.flowinfo = *(__be32 *)(&ip6) & IPV6_FLOWINFO_MASK;
-    fib_params.ifindex = skb->ifindex;
-    break;
-  case ETH_P_IPV6:
-    break;
-  default:
-    break;
+  } else if (eth.h_proto == bpf_htons(ETH_P_IP)) {
+    fib_params.family = AF_INET;
+    fib_params.tos = ip4.tos;
+    fib_params.l4_protocol = ip4.protocol;
+    fib_params.tot_len = bpf_ntohs(ip4.tot_len);
+    fib_params.ipv4_src = ip4.saddr;
+    fib_params.ipv4_dst = ip4.daddr;
+  } else {
+    bpf_printk("unkown protocol %d", eth.h_proto);
   }
   // __u32 fib_flags = BPF_FIB_LOOKUP_DIRECT & BPF_FIB_LOOKUP_OUTPUT;
-  __u32 fib_flags = BPF_FIB_LOOKUP_OUTPUT;
+  // __u32 fib_flags = BPF_FIB_LOOKUP_OUTPUT;
+  __u32 fib_flags = 0;
+
   ret = bpf_fib_lookup(skb, &fib_params, sizeof(fib_params), fib_flags);
   if (ret < 0) {
 #ifdef DEBUG
@@ -934,10 +935,35 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
 #endif
     return TC_ACT_OK;
   }
+  bool redirect = false;
+  bool redirect_neigh = false;
   switch (ret) {
   case BPF_FIB_LKUP_RET_SUCCESS: /* lookup successful */
-    // __builtin_memcpy(&eth.h_dest, fib_params.dmac, ETH_ALEN);
-    // __builtin_memcpy(&eth.h_source, fib_params.smac, ETH_ALEN);
+    redirect = true;
+    __builtin_memcpy(eth.h_dest, fib_params.dmac, ETH_ALEN);
+    __builtin_memcpy(eth.h_source, fib_params.smac, ETH_ALEN);
+#ifdef DEBUG
+    bpf_printk("FIB lookup returned success");
+    bpf_printk("new smac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_source[0],
+               eth.h_source[1], eth.h_source[2], eth.h_source[3],
+               eth.h_source[4], eth.h_source[5]);
+    bpf_printk("new dmac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_dest[0],
+               eth.h_dest[1], eth.h_dest[2], eth.h_dest[3], eth.h_dest[4],
+               eth.h_dest[5]);
+#endif
+
+    if (eth.h_proto == bpf_htons(ETH_P_IP))
+      ip_decrease_ttl(&ip4);
+    else if (eth.h_proto == bpf_htons(ETH_P_IPV6))
+      ip6.hop_limit--;
+    break;
+  case BPF_FIB_LKUP_RET_NO_NEIGH:
+#ifdef DEBUG
+    bpf_printk("FIB lookup returned no neighbor, redirecting with neighbor to "
+               "interface %d",
+               fib_params.ifindex);
+#endif
+    redirect_neigh = true;
     break;
   default:
 #ifdef DEBUG
@@ -951,8 +977,36 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
 #endif
   }
 
+  if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
+    // Copy over the new IPv6 header.
+    // This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE
+    // packet.
+    ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), &ip6,
+                              sizeof(struct ipv6hdr), BPF_F_RECOMPUTE_CSUM);
+    if (ret < 0) {
+#ifdef DEBUG
+      bpf_printk("IP4->IP6: bpf_skb_store_bytes failed with code: %d", ret);
+#endif
+      return IP_ERROR;
+    }
+  }
+  if (eth.h_proto == bpf_htons(ETH_P_IP)) {
+    // Copy over the new IPv4 header.
+    // packet.
+    // TODO: change to BPF_F_RECOMPUTE_CSUM
+    ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), &ip4,
+                              sizeof(struct iphdr), 0);
+    if (ret < 0) {
+#ifdef DEBUG
+      bpf_printk("IP6->IP4: bpf_skb_store_bytes failed with code: %d", ret);
+#endif
+      return IP_ERROR;
+    }
+  }
+
   // Copy over the ethernet header with updated ethertype.
-  ret = bpf_skb_store_bytes(skb, 0, &eth, sizeof(struct ethhdr), 0);
+  ret = bpf_skb_store_bytes(skb, 0, &eth, sizeof(struct ethhdr),
+                            BPF_F_RECOMPUTE_CSUM);
   if (ret < 0) {
 #ifdef DEBUG
     bpf_printk("packet dropped: copy eth header");
@@ -965,15 +1019,21 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   // e.g. [2a05:b540:cadd::4]:0->[fe80::4a2:ebff:fe27:a8b] which is the ipv6
   // of the container running the filters
   if (fib_params.ifindex != skb->ifindex) {
-    // redirect to egress
 #ifdef DEBUG
     bpf_printk("fib lookup returned different interface. Redirecting to "
                "interface index %d, recieved on interface index %d",
                fib_params.ifindex, skb->ifindex);
 #endif
-    return bpf_redirect(fib_params.ifindex, 0);
   }
-
+  // TODO:
+  //   this should do a lookup wether the ifindex is a bridge or something not
+  //       putting the packet out to the wire
+  // if (redirect_neigh)
+  //   return bpf_redirect_neigh(fib_params.ifindex, NULL, 0, 0);
+  // if (redirect)
+  //   return bpf_redirect(fib_params.ifindex, 0);
+  //
+  bpf_skb_change_type(skb, PACKET_HOST);
   return TC_ACT_OK;
 }
 

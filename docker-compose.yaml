@@ -14,15 +14,17 @@ networks:
       config:
         - subnet: 10.255.0.0/16
 services:
-  tcpdump-discovery:
-    network_mode: host
-    image: nicolaka/netshoot
-    entrypoint:
-      - tcpdump
-      - -i 
-      - any
-      # neighbor solicitations
-      - 'arp or (icmp6 and ip6[40] = 135)'
+  # tcpdump-discovery:
+  #   network_mode: host
+  #   image: nicolaka/netshoot
+  #   entrypoint:
+  #     - tcpdump
+  #     - -i 
+  #     - any
+  #     - -vvv
+  #     - -ttt
+  #     # neighbor solicitations
+  #     - 'arp or (icmp6 and ip6[40] = 135)'
 
   tcpdump-net:
     network_mode: host
@@ -31,7 +33,8 @@ services:
       - tcpdump
       - -i 
       - any
-      - 'net 64:ff9b:dead:beef::/96 or host 10.0.0.1'
+      - -nnvvvttt
+      - 'net 64:ff9b:dead:beef::/96 or host 10.0.0.1 or host 2a05:b540:cadd::4'
   siit:
     build:
       context: .
@@ -50,23 +53,20 @@ services:
     # nginx
     - -ipv6=2a05:b540:cadd::4
 
-  # pwru:
-  #   init: true
-  #   build:
-  #     context: https://github.com/cilium/pwru.git
-  #   privileged: true
-  #   tty: true
-  #   entrypoint: pwru
-  #   command:
-  #     - --filter-trace-tc
-  #     - "host 10.0.0.1 or host 2a05:b540:cadd::4 or net fe80:dead:beef::/96"
-  #   volumes:
-  #     - /sys/kernel/debug/:/sys/kernel/debug/
-  #   pid: host
-  #   network_mode: host
+  netcat:
+    networks:
+      ipv6:
+        ipv6_address: 2a05:b540:cadd::4
+    image: nicolaka/netshoot
+    init: true
+    tty: true
+    command:
+      - nc
+      - -6vnlk
+      - "80"
 
   nginx:
     networks:
       ipv6:
-        ipv6_address: 2a05:b540:cadd::4
+        ipv6_address: 2a05:b540:cadd::5
     image: nginx
