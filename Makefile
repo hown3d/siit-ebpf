@@ -49,13 +49,13 @@ generate-linux-headers:
 	# cp -R /tmp/linux/usr/include/asm-generic $(INCLUDE_FOLDER)
 	rm -r linuxkit
 
-up:
-	docker compose up --build
+
+### Testbed
 
 up-server:
 	ip netns exec ns_server python3 -m http.server 80 --bind ::
 
-nc-client:
+up-client:
 	ip netns exec ns_client curl -vvv 10.0.0.5:80
 
 setup-routes:
@@ -64,6 +64,4 @@ setup-routes:
 remove-routes:
 	./hack/setup-routes.sh --delete
 
-down:
-	docker compose down --timeout 300
 
