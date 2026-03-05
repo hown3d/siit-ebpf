@@ -17,8 +17,7 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-// return code of bpf_redirect if packet is redirected
-const TC_ACT_REDIRECT = 0x7
+const TC_ACT_OK = 0x0
 
 var testPrefix = netip.MustParsePrefix("2001:db8:cafe::/96")
 
@@ -136,8 +135,8 @@ func TestManager_Siit46(t *testing.T) {
 	packet := testutil.DecodePacket(outData)
 	t.Log("ebpf program ran, printing packet")
 	t.Log(packet.Dump())
-	if ret != TC_ACT_REDIRECT {
-		t.Fatalf("ebpf program returned code != TC_ACT_REDIRECT: %d", ret)
+	if ret != TC_ACT_OK {
+		t.Fatalf("ebpf program returned code != TC_ACT_OK: %d", ret)
 	}
 
 	flow := packet.NetworkLayer().NetworkFlow()
