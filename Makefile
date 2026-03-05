@@ -12,16 +12,6 @@ build:
 run:
 	./manager -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2
 
-run-netns:
-	ip netns exec ns_router $(MAKE) run
-
-
-pcap = 'net 64:ff9b:dead:beef::/96 or host 10.0.0.5 or host 10.0.0.2 or host 10.0.0.254 or net fd00::/32'
-tcpdump:
-	tcpdump -i any -nnvvvttt $(pcap)
-
-pwru:
-	./hack/pwru.sh --filter-trace-tc $(pcap)
 
 ebpf-test:
 	docker run --privileged -v $(shell go env GOMODCACHE):/go/pkg/mod -v $(PWD):/src -v /sys/kernel/tracing:/sys/kernel/tracing:rw -w /src golang go test -v ./internal/bpf/...
@@ -52,16 +42,28 @@ generate-linux-headers:
 
 ### Testbed
 
+ipv4 = 10.0.0.5
+
 up-server:
 	ip netns exec ns_server python3 -m http.server 80 --bind ::
 
 up-client:
-	ip netns exec ns_client curl -vvv 10.0.0.5:80
+	ip netns exec ns_client curl -vvv $(ipv4):80
 
 setup-routes:
-	./hack/setup-routes.sh --pool 64:ff9b:dead:beef::/96 --ipv4 10.0.0.5 || true
+	./hack/setup-routes.sh --pool 64:ff9b:dead:beef::/96 --ipv4 $(ipv4) || true
 
 remove-routes:
 	./hack/setup-routes.sh --delete
 
+run-netns:
+	ip netns exec ns_router $(MAKE) run
 
+# pool or client network or server network
+pcap = net 64:ff9b:dead:beef::/96 or net 10.0.0.0/24 or net fd00::/32
+
+tcpdump:
+	tcpdump -i any -nnvvvttt $(pcap)
+
+pwru:
+	./hack/pwru.sh --filter-trace-tc $(pcap)
