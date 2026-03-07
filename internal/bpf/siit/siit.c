@@ -940,16 +940,16 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   switch (ret) {
   case BPF_FIB_LKUP_RET_SUCCESS: /* lookup successful */
     redirect = true;
-    __builtin_memcpy(eth.h_dest, fib_params.dmac, ETH_ALEN);
     __builtin_memcpy(eth.h_source, fib_params.smac, ETH_ALEN);
+    __builtin_memcpy(eth.h_dest, fib_params.dmac, ETH_ALEN);
 #ifdef DEBUG
     bpf_printk("FIB lookup returned success");
-    bpf_printk("new smac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_source[0],
-               eth.h_source[1], eth.h_source[2], eth.h_source[3],
-               eth.h_source[4], eth.h_source[5]);
-    bpf_printk("new dmac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_dest[0],
-               eth.h_dest[1], eth.h_dest[2], eth.h_dest[3], eth.h_dest[4],
-               eth.h_dest[5]);
+    bpf_printk("FIB recieved smac: %02x:%02x:%02x:%02x:%02x:%02x",
+               fib_params.smac[0], fib_params.smac[1], fib_params.smac[2],
+               fib_params.smac[3], fib_params.smac[4], fib_params.smac[5]);
+    bpf_printk("FIB recieved dmac: %02x:%02x:%02x:%02x:%02x:%02x",
+               fib_params.dmac[0], fib_params.dmac[1], fib_params.dmac[2],
+               fib_params.dmac[3], fib_params.dmac[4], fib_params.dmac[5]);
 #endif
 
     if (eth.h_proto == bpf_htons(ETH_P_IP))
@@ -976,6 +976,13 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     bpf_printk("fib lookup was not successfull, got code %d", ret);
 #endif
   }
+
+  bpf_printk("new smac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_source[0],
+             eth.h_source[1], eth.h_source[2], eth.h_source[3], eth.h_source[4],
+             eth.h_source[5]);
+  bpf_printk("new dmac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_dest[0],
+             eth.h_dest[1], eth.h_dest[2], eth.h_dest[3], eth.h_dest[4],
+             eth.h_dest[5]);
 
   if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
     // Copy over the new IPv6 header.
@@ -1014,10 +1021,6 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     return TC_ACT_SHOT;
   }
 
-  // TODO:
-  // Returning packets however don't have the correct ip as destination
-  // e.g. [2a05:b540:cadd::4]:0->[fe80::4a2:ebff:fe27:a8b] which is the ipv6
-  // of the container running the filters
   if (fib_params.ifindex != skb->ifindex) {
 #ifdef DEBUG
     bpf_printk("fib lookup returned different interface. Redirecting to "
@@ -1028,12 +1031,11 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   // TODO:
   //   this should do a lookup wether the ifindex is a bridge or something not
   //       putting the packet out to the wire
-  // if (redirect_neigh)
-  //   return bpf_redirect_neigh(fib_params.ifindex, NULL, 0, 0);
-  // if (redirect)
-  //   return bpf_redirect(fib_params.ifindex, 0);
-  //
-  bpf_skb_change_type(skb, PACKET_HOST);
+  if (redirect_neigh)
+    return bpf_redirect_neigh(fib_params.ifindex, NULL, 0, 0);
+  if (redirect)
+    return bpf_redirect(fib_params.ifindex, 0);
+
   return TC_ACT_OK;
 }
 
