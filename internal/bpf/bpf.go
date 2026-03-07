@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"os"
 
 	"github.com/cilium/ebpf"
 	ebpflink "github.com/cilium/ebpf/link"
@@ -20,6 +22,7 @@ const (
 )
 
 type Manager struct {
+	pool    netip.Prefix
 	log     logr.Logger
 	bpfObjs *siitObjects
 	// stores ip pairs for nat46
@@ -173,6 +176,7 @@ func NewManager(pool netip.Prefix) (*Manager, error) {
 	return &Manager{
 		log:     klog.NewKlogr().WithName("manager"),
 		bpfObjs: &objs,
+		pool:    pool,
 		ip6Map:  newIP6Map(objs.Ipv6AddressMappings),
 		ip4Map:  newIP4Map(objs.Ipv4AddressMappings),
 	}, nil
@@ -198,6 +202,17 @@ func (m *Manager) SetupLinks() error {
 			return fmt.Errorf("error attaching program to interface %s: %w", l.Attrs().Name, err)
 		}
 	}
+	if err := netlink.RouteAdd(&netlink.Route{
+		LinkIndex: hostDev.Attrs().Index,
+		Dst: &net.IPNet{
+			IP:   m.pool.Addr().AsSlice(),
+			Mask: net.CIDRMask(m.pool.Bits(), m.pool.Addr().BitLen()),
+		},
+	}); err != nil {
+		if !os.IsExist(err) {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -207,9 +222,23 @@ type Entry struct {
 	IPv6 netip.Addr
 }
 
+func (e Entry) v4Route(link netlink.Link) *netlink.Route {
+	return &netlink.Route{
+		Family:    netlink.FAMILY_V4,
+		LinkIndex: link.Attrs().Index,
+		Dst: &net.IPNet{
+			IP:   e.IPv4.AsSlice(),
+			Mask: net.IPv4Mask(255, 255, 255, 255),
+		},
+	}
+}
+
 func (m *Manager) AddEntry(e Entry) error {
 	// TODO: setup routes to route ipv4 to siit device
 	m.log.Info("adding entry", "ipv4", e.IPv4, "ipv6", e.IPv6)
+	if err := addV4Route(e); err != nil {
+		return err
+	}
 	var err error
 	err = errors.Join(err, m.ip4Map.Add(e.IPv4, e.IPv6))
 	err = errors.Join(err, m.ip6Map.Add(e.IPv6, e.IPv4))
@@ -218,8 +247,35 @@ func (m *Manager) AddEntry(e Entry) error {
 
 func (m *Manager) DeleteEntry(e Entry) error {
 	m.log.Info("deleting entry", "ipv4", e.IPv4, "ipv6", e.IPv6)
+	if err := deleteV4Route(e); err != nil {
+		return err
+	}
 	var err error
 	err = errors.Join(err, m.ip4Map.Delete(e.IPv4))
 	err = errors.Join(err, m.ip6Map.Delete(e.IPv6))
 	return err
+}
+
+// addV4Route adds the entries ipv4 address to siit-peer device to allow processing responses.
+// This must be on the peer device, as the outgoing device will be this if we push packets into the siit device.
+// If not, the packet will be dropped by rpfilter
+func addV4Route(e Entry) error {
+	link, err := netlink.LinkByName(SecondHostDevice)
+	if err != nil {
+		return err
+	}
+	if err := netlink.RouteAdd(e.v4Route(link)); err != nil {
+		if !os.IsExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteV4Route(e Entry) error {
+	link, err := netlink.LinkByName(SecondHostDevice)
+	if err != nil {
+		return err
+	}
+	return netlink.RouteDel(e.v4Route(link))
 }

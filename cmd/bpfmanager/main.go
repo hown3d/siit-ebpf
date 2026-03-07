@@ -35,14 +35,15 @@ func main() {
 	}
 	defer manager.Close()
 
+	if err := manager.SetupLinks(); err != nil {
+		log.Fatal(err)
+	}
+
 	err = manager.AddEntry(bpf.Entry{
 		IPv4: netip.MustParseAddr(*ipv4),
 		IPv6: netip.MustParseAddr(*ipv6),
 	})
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := manager.SetupLinks(); err != nil {
 		log.Fatal(err)
 	}
 

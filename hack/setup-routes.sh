@@ -83,13 +83,9 @@ fi
   echo "Configuring Router (IPv4: 10.0.0.254/24 | IPv6: fd00::1/64)..."
   ip -n ns_router link set veth_cr up
   ip -n ns_router addr add 10.0.0.254/24 dev veth_cr
-  # route response traffic back to client
-  ip -n ns_router route add ${ipv4}/32 dev siit-peer
 
   ip -n ns_router link set veth_sr up
   ip -n ns_router addr add fd00::1/64 dev veth_sr
-  # ip -n ns_router route add ${ipv4} dev siit
-  ip -n ns_router route add ${pool} dev siit
 
   # Enable IP forwarding inside the router namespace
   ip netns exec ns_router sysctl -qw net.ipv4.ip_forward=1
