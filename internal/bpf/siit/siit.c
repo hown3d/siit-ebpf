@@ -15,8 +15,10 @@ limitations under the License.
 */
 
 #include "bpf/bpf_endian.h"
+#include "consts.h"
 #include "filter_config.h"
 #include "helpers/csum.h"
+#include "helpers/fib_lookup.h"
 #include "linux/icmp.h"
 #include "linux/icmp6.h"
 #include "linux/if_ether.h"
@@ -25,36 +27,6 @@ limitations under the License.
 
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-
-// net/ip.h
-#define IP_DF 0x4000 /* Flag: "Don't Fragment"	*/
-
-// Success error codes >= 0
-#define IP_OK 0
-// Failure error codes < 0
-#define IP_NOT_SUPPORTED -1
-// TODO: differentiate errors between drop and forward?
-#define IP_ERROR -2
-#define IP_UNDEFINED -127
-
-// Success error codes >= 0
-#define ICMP_OK 0
-// Failure error codes < 0
-#define ICMP_NOT_SUPPORTED -1
-// TODO: differentiate errors between drop and forward?
-#define ICMP_ERROR -2
-
-#define TC_ACT_OK 0
-#define TC_ACT_SHOT 2
-
-#define PACKET_HOST 0
-#define DEFAULT_MTU 1500
-
-#define AF_INET 2
-#define AF_INET6 10
-#define IPV6_FLOWINFO_MASK bpf_htonl(0x0FFFFFFF)
-
-#define DEBUG 1 // Define DEBUG as 1 for debug mode, 0 for production
 
 // all variables here are overriden from user-space level
 volatile uint32_t IPV6_POOL_0;
@@ -76,15 +48,6 @@ struct {
   __type(value, struct in_addr);
   __uint(max_entries, ADDRESS_MAPPINGS_MAP_ELEMS);
 } ipv6_address_mappings SEC(".maps");
-
-/* from include/net/ip.h */
-static __always_inline int ip_decrease_ttl(struct iphdr *iph) {
-  u32 check = (__u32)iph->check;
-
-  check += (__u32)bpf_htons(0x0100);
-  iph->check = (__sum16)(check + (check >= 0xFFFF));
-  return --iph->ttl;
-}
 
 static __always_inline bool siit64_valid(const struct __sk_buff *skb) {
   const void *data = (void *)(long)skb->data;
@@ -897,97 +860,17 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     }
   }
 
-  struct bpf_fib_lookup fib_params = {};
-  fib_params.sport = 0;
-  fib_params.dport = 0;
-  // fib_params.ifindex = skb->ingress_ifindex;
-  fib_params.ifindex = skb->ifindex;
-
-  // use if else to allow instantiation inside block
+  int fib_ret = -1;
+  __u32 new_ifindex = 0;
   if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
-    struct in6_addr *src = (struct in6_addr *)fib_params.ipv6_src;
-    struct in6_addr *dst = (struct in6_addr *)fib_params.ipv6_dst;
-
-    *src = ip6.saddr;
-    *dst = ip6.daddr;
-    fib_params.family = AF_INET6;
-    fib_params.l4_protocol = ip6.nexthdr;
-    fib_params.tot_len = bpf_ntohs(ip6.payload_len);
-    fib_params.flowinfo = *(__be32 *)(&ip6) & IPV6_FLOWINFO_MASK;
-  } else if (eth.h_proto == bpf_htons(ETH_P_IP)) {
-    fib_params.family = AF_INET;
-    fib_params.tos = ip4.tos;
-    fib_params.l4_protocol = ip4.protocol;
-    fib_params.tot_len = bpf_ntohs(ip4.tot_len);
-    fib_params.ipv4_src = ip4.saddr;
-    fib_params.ipv4_dst = ip4.daddr;
-  } else {
-    bpf_printk("unkown protocol %d", eth.h_proto);
-  }
-  // __u32 fib_flags = BPF_FIB_LOOKUP_DIRECT & BPF_FIB_LOOKUP_OUTPUT;
-  // __u32 fib_flags = BPF_FIB_LOOKUP_OUTPUT;
-  __u32 fib_flags = 0;
-
-  ret = bpf_fib_lookup(skb, &fib_params, sizeof(fib_params), fib_flags);
-  if (ret < 0) {
-#ifdef DEBUG
-    bpf_printk("fib lookup errored, got code %d", ret);
-#endif
-    return TC_ACT_OK;
-  }
-  bool redirect = false;
-  bool redirect_neigh = false;
-  switch (ret) {
-  case BPF_FIB_LKUP_RET_SUCCESS: /* lookup successful */
-    redirect = true;
-    __builtin_memcpy(eth.h_source, fib_params.smac, ETH_ALEN);
-    __builtin_memcpy(eth.h_dest, fib_params.dmac, ETH_ALEN);
-#ifdef DEBUG
-    bpf_printk("FIB lookup returned success");
-    bpf_printk("FIB recieved smac: %02x:%02x:%02x:%02x:%02x:%02x",
-               fib_params.smac[0], fib_params.smac[1], fib_params.smac[2],
-               fib_params.smac[3], fib_params.smac[4], fib_params.smac[5]);
-    bpf_printk("FIB recieved dmac: %02x:%02x:%02x:%02x:%02x:%02x",
-               fib_params.dmac[0], fib_params.dmac[1], fib_params.dmac[2],
-               fib_params.dmac[3], fib_params.dmac[4], fib_params.dmac[5]);
-#endif
-
-    if (eth.h_proto == bpf_htons(ETH_P_IP))
-      ip_decrease_ttl(&ip4);
-    else if (eth.h_proto == bpf_htons(ETH_P_IPV6))
-      ip6.hop_limit--;
-    break;
-  case BPF_FIB_LKUP_RET_NO_NEIGH:
-#ifdef DEBUG
-    bpf_printk("FIB lookup returned no neighbor, redirecting with neighbor to "
-               "interface %d",
-               fib_params.ifindex);
-#endif
-    redirect_neigh = true;
-    break;
-  default:
-#ifdef DEBUG
-    /*
-     * BPF_FIB_LKUP_RET_FWD_DISABLED:
-     *  The bpf_fib_lookup respect sysctl net.ipv{4,6}.conf.all.forwarding
-     *  setting, and will return BPF_FIB_LKUP_RET_FWD_DISABLED if not
-     *  enabled this on ingress device.
-     */
-    bpf_printk("fib lookup was not successfull, got code %d", ret);
-#endif
-  }
-
-  bpf_printk("new smac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_source[0],
-             eth.h_source[1], eth.h_source[2], eth.h_source[3], eth.h_source[4],
-             eth.h_source[5]);
-  bpf_printk("new dmac: %02x:%02x:%02x:%02x:%02x:%02x", eth.h_dest[0],
-             eth.h_dest[1], eth.h_dest[2], eth.h_dest[3], eth.h_dest[4],
-             eth.h_dest[5]);
-
-  if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
+    fib_ret = fib_lookup_v6(skb, &eth, &ip6, &new_ifindex);
+    if (fib_ret < 0) {
+      bpf_printk("fib_lookup_v6 failed with code %d", fib_ret);
+      return TC_ACT_SHOT;
+    }
     // Copy over the new IPv6 header.
-    // This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE
-    // packet.
+    // This takes care of updating the skb->csum field for a
+    // CHECKSUM_COMPLETE packet.
     ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), &ip6,
                               sizeof(struct ipv6hdr), BPF_F_RECOMPUTE_CSUM);
     if (ret < 0) {
@@ -998,6 +881,11 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     }
   }
   if (eth.h_proto == bpf_htons(ETH_P_IP)) {
+    fib_ret = fib_lookup_v4(skb, &eth, &ip4, &new_ifindex);
+    if (fib_ret < 0) {
+      bpf_printk("fib_lookup_v4 failed with code %d", fib_ret);
+      return TC_ACT_SHOT;
+    }
     // Copy over the new IPv4 header.
     // packet.
     // TODO: change to BPF_F_RECOMPUTE_CSUM
@@ -1021,20 +909,17 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     return TC_ACT_SHOT;
   }
 
-  if (fib_params.ifindex != skb->ifindex) {
-#ifdef DEBUG
-    bpf_printk("fib lookup returned different interface. Redirecting to "
-               "interface index %d, recieved on interface index %d",
-               fib_params.ifindex, skb->ifindex);
-#endif
-  }
   // TODO:
   //   this should do a lookup wether the ifindex is a bridge or something not
   //       putting the packet out to the wire
-  if (redirect_neigh)
-    return bpf_redirect_neigh(fib_params.ifindex, NULL, 0, 0);
-  if (redirect)
-    return bpf_redirect(fib_params.ifindex, 0);
+  if (fib_ret == BPF_FIB_LKUP_RET_NO_NEIGH) {
+    bpf_printk("redirect_neigh to new ifindex %d", new_ifindex);
+    return bpf_redirect_neigh(new_ifindex, NULL, 0, 0);
+  }
+  if (fib_ret == BPF_FIB_LKUP_RET_SUCCESS) {
+    bpf_printk("redirect to new ifindex %d", new_ifindex);
+    return bpf_redirect(new_ifindex, 0);
+  }
 
   return TC_ACT_OK;
 }
