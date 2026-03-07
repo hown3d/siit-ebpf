@@ -13,6 +13,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/hown3d/siit-ebpf/internal/bpf/testutil"
+	"github.com/hown3d/siit-ebpf/internal/mac"
 	"github.com/hown3d/siit-ebpf/internal/netns"
 	"github.com/vishvananda/netlink"
 )
@@ -44,14 +45,6 @@ func TestManager_Siit46(t *testing.T) {
 	expectedNewDst := netip.MustParseAddr("2001:db8::68")
 	dst := netip.MustParseAddr("10.0.4.2")
 
-	err = m.AddEntry(Entry{
-		IPv4: dst,
-		IPv6: expectedNewDst,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	in, err := ipv4Packet(src, dst)
 	if err != nil {
 		t.Fatalf("building ipv4 packet: %s", err)
@@ -61,16 +54,20 @@ func TestManager_Siit46(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating network namespace: %s", err)
 	}
+	v4Mac := must(t, mac.GenerateRandMAC)
+	v6Mac := must(t, mac.GenerateRandMAC)
 
 	v4Link := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{
-			Name: "v4",
+			Name:         "v4",
+			HardwareAddr: v4Mac,
 		},
 	}
 
-	v6Link := &netlink.Bridge{
+	v6Link := &netlink.Dummy{
 		LinkAttrs: netlink.LinkAttrs{
-			Name: "v6",
+			Name:         "v6",
+			HardwareAddr: v6Mac,
 		},
 	}
 
@@ -83,6 +80,13 @@ func TestManager_Siit46(t *testing.T) {
 			if err := m.SetupLinks(); err != nil {
 				return err
 			}
+			err = m.AddEntry(Entry{
+				IPv4: dst,
+				IPv6: expectedNewDst,
+			})
+			if err != nil {
+				return err
+			}
 			if err := setupTestLink(v4Link); err != nil {
 				return fmt.Errorf("setup v4 link: %w", err)
 			}
@@ -90,18 +94,18 @@ func TestManager_Siit46(t *testing.T) {
 				return fmt.Errorf("setup v6 link: %w", err)
 			}
 
-			v6Route := &netlink.Route{
-				Family:    netlink.FAMILY_V6,
-				LinkIndex: v6Link.Index,
-				Dst: &net.IPNet{
-					IP:   testPrefix.Addr().AsSlice(),
-					Mask: net.CIDRMask(testPrefix.Bits(), testPrefix.Addr().BitLen()),
-				},
-			}
-			t.Logf("setup v6 route: %s", v6Route)
-			if err := netlink.RouteAdd(v6Route); err != nil {
-				return fmt.Errorf("setup v6 route: %w", err)
-			}
+			// v6Route := &netlink.Route{
+			// 	Family:    netlink.FAMILY_V6,
+			// 	LinkIndex: v6Link.Index,
+			// 	Dst: &net.IPNet{
+			// 		IP:   testPrefix.Addr().AsSlice(),
+			// 		Mask: net.CIDRMask(testPrefix.Bits(), testPrefix.Addr().BitLen()),
+			// 	},
+			// }
+			// t.Logf("setup v6 route: %s", v6Route)
+			// if err := netlink.RouteAdd(v6Route); err != nil {
+			// 	return fmt.Errorf("setup v6 route: %w", err)
+			// }
 
 			if err := logRoutes(t, netlink.FAMILY_V6); err != nil {
 				return fmt.Errorf("logging ipv6 routes: %w", err)
@@ -257,4 +261,12 @@ func logRoutes(t *testing.T, family int) error {
 		t.Logf("route %s", r)
 	}
 	return nil
+}
+
+func must[T any](t *testing.T, f func() (T, error)) T {
+	obj, err := f()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return obj
 }
