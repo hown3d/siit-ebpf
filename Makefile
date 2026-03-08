@@ -9,7 +9,12 @@ go-generate:
 build:
 	CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o manager ./cmd/bpfmanager/ 
 
+NETNS ?=
 run:
+ifneq ($(NETNS),)
+	@echo "running manager in network namespace $(NETNS)"
+	@ip netns exec $(NETNS) $(MAKE) NETNS= run
+endif
 	./manager -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2
 
 
@@ -55,9 +60,6 @@ setup-routes:
 
 remove-routes:
 	./hack/setup-routes.sh --delete
-
-run-netns:
-	ip netns exec ns_router $(MAKE) run
 
 # pool or client network or server network
 pcap = net 64:ff9b:dead:beef::/96 or net 10.0.0.0/24 or net fd00::/32

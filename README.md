@@ -6,12 +6,12 @@
 > If you are not on linux, make sure that you run the marked commands inside your Linux VM
 
 1. `make build` builds the manager binary
-2. Linux: `make setup-routes` // setup the testbed
-3. Linux: `make run`
+2. setup the Testbed: Linux: `make setup-routes`
+3. Linux: `make NETNS=ns_router run`
 
 ### Testbed
 
-The testbed is configured to use 3 network namespaces for isolation for:
+The Testbed is configured to use 3 network namespaces for isolation for:
 
 - Manager
 - Server
