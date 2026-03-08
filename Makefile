@@ -7,7 +7,7 @@ go-generate:
 	docker run -ti -v $(PWD):/work -w /work siit-ebpf-deps go generate ./...
 
 build:
-	CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o manager ./cmd/bpfmanager/ 
+	CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o siit-bin ./cmd
 
 NETNS ?=
 run:
@@ -15,7 +15,7 @@ ifneq ($(NETNS),)
 	@echo "running manager in network namespace $(NETNS)"
 	@ip netns exec $(NETNS) $(MAKE) NETNS= run
 endif
-	./manager -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2
+	./siit-bin -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2
 
 
 ebpf-test:

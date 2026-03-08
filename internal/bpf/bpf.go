@@ -1,6 +1,7 @@
 package bpf
 
 import (
+	"encoding"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -233,6 +234,30 @@ func (e Entry) v4Route(link netlink.Link) *netlink.Route {
 	}
 }
 
+func (m *Manager) ListEntries() ([]Entry, error) {
+	mapEntries, err := m.ip4Map.List()
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]Entry, 0, len(mapEntries))
+	for bpfIP4, bpfIP6 := range mapEntries {
+		ip4, err := ipFromMarshaler(bpfIP4)
+		if err != nil {
+			return nil, fmt.Errorf("recieving ipv4 from entry: %w", err)
+		}
+		ip6, err := ipFromMarshaler(bpfIP6)
+		if err != nil {
+			return nil, fmt.Errorf("recieving ipv6 from entry: %w", err)
+		}
+		entries = append(entries, Entry{
+			IPv4: ip4,
+			IPv6: ip6,
+		})
+	}
+	return entries, nil
+}
+
 func (m *Manager) AddEntry(e Entry) error {
 	// TODO: setup routes to route ipv4 to siit device
 	m.log.Info("adding entry", "ipv4", e.IPv4, "ipv6", e.IPv6)
@@ -278,4 +303,16 @@ func deleteV4Route(e Entry) error {
 		return err
 	}
 	return netlink.RouteDel(e.v4Route(link))
+}
+
+func ipFromMarshaler(m encoding.BinaryMarshaler) (netip.Addr, error) {
+	raw, err := m.MarshalBinary()
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	ip, ok := netip.AddrFromSlice(raw)
+	if !ok {
+		return netip.Addr{}, errors.New("invalid ip")
+	}
+	return ip, nil
 }

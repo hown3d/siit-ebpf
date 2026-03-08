@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/hown3d/siit-ebpf/internal/api"
 	"github.com/hown3d/siit-ebpf/internal/bpf"
 )
 
@@ -47,7 +48,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	<-ctx.Done()
+	a, err := api.New(manager)
+	if err != nil {
+		log.Fatal("setup API", err)
+	}
+	if err := a.Serve(ctx); err != nil {
+		log.Fatal("error serving", err)
+	}
 }
 
 var shutdownSignals = []os.Signal{os.Interrupt, syscall.SIGTERM}

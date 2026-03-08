@@ -1,6 +1,7 @@
 package bpf
 
 import (
+	"encoding"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,6 +17,25 @@ type (
 	bpfIP6 siitIn6Addr
 )
 
+// ebpf-go will use the binary implementations to read and write into maps.
+// We must implement them to ensure we always write the ip addresses in network order
+var (
+	_ encoding.BinaryUnmarshaler = (*bpfIP4)(nil)
+	_ encoding.BinaryUnmarshaler = (*bpfIP6)(nil)
+	_ encoding.BinaryMarshaler   = bpfIP4{}
+	_ encoding.BinaryMarshaler   = bpfIP6{}
+)
+
+func (i *bpfIP4) UnmarshalBinary(data []byte) error {
+	_, err := binary.Decode(data, binary.BigEndian, &i.S_addr)
+	return err
+}
+
+func (i *bpfIP6) UnmarshalBinary(data []byte) error {
+	_, err := binary.Decode(data, binary.BigEndian, &i.In6U.U6Addr8)
+	return err
+}
+
 func (i bpfIP4) MarshalBinary() (data []byte, err error) {
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, i.S_addr)
@@ -27,7 +47,7 @@ func (i bpfIP6) MarshalBinary() (data []byte, err error) {
 	return binary.Append(buf, binary.BigEndian, i.In6U.U6Addr8)
 }
 
-type ipMap[K, V any] struct {
+type ipMap[K, V comparable] struct {
 	keyFunc func(netip.Addr) (K, error)
 	valFunc func(netip.Addr) (V, error)
 
@@ -76,6 +96,23 @@ func (m *ipMap[K, V]) Delete(src netip.Addr) error {
 		}
 	}
 	return nil
+}
+
+func (m *ipMap[K, V]) List() (map[K]V, error) {
+	key := new(K)
+	val := new(V)
+
+	keyVal := make(map[K]V)
+
+	iter := m.ebpfMap.Iterate()
+	for iter.Next(key, val) {
+		keyVal[*key] = *val
+	}
+
+	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	return keyVal, nil
 }
 
 // ip4ToBpfType translates an netip.Addr to the bpf representation of ipv4
