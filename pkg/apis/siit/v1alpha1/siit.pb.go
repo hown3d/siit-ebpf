@@ -7,6 +7,7 @@
 package v1alpha1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -23,7 +24,7 @@ const (
 
 type ListRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Pool          *IPPrefix              `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"`
+	Pool          *IPv6Prefix            `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -58,7 +59,7 @@ func (*ListRequest) Descriptor() ([]byte, []int) {
 	return file_siit_v1alpha1_siit_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *ListRequest) GetPool() *IPPrefix {
+func (x *ListRequest) GetPool() *IPv6Prefix {
 	if x != nil {
 		return x.Pool
 	}
@@ -111,7 +112,7 @@ func (x *ListResponse) GetEntries() []*EAMTEntry {
 
 type CreateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Pool          *IPPrefix              `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"`
+	Pool          *IPv6Prefix            `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"`
 	Entry         *EAMTEntry             `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -147,7 +148,7 @@ func (*CreateRequest) Descriptor() ([]byte, []int) {
 	return file_siit_v1alpha1_siit_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *CreateRequest) GetPool() *IPPrefix {
+func (x *CreateRequest) GetPool() *IPv6Prefix {
 	if x != nil {
 		return x.Pool
 	}
@@ -199,7 +200,7 @@ func (*CreateResponse) Descriptor() ([]byte, []int) {
 
 type DeleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Pool          *IPPrefix              `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"`
+	Pool          *IPv6Prefix            `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"`
 	Entry         *EAMTEntry             `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -235,7 +236,7 @@ func (*DeleteRequest) Descriptor() ([]byte, []int) {
 	return file_siit_v1alpha1_siit_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *DeleteRequest) GetPool() *IPPrefix {
+func (x *DeleteRequest) GetPool() *IPv6Prefix {
 	if x != nil {
 		return x.Pool
 	}
@@ -419,28 +420,27 @@ func (*IPAddress_Ipv4) isIPAddress_Ip() {}
 
 func (*IPAddress_Ipv6) isIPAddress_Ip() {}
 
-type IPPrefix struct {
+type IPv6Prefix struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ip            *IPAddress             `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
-	PrefixLen     uint32                 `protobuf:"varint,3,opt,name=prefix_len,json=prefixLen,proto3" json:"prefix_len,omitempty"`
+	Prefix        string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *IPPrefix) Reset() {
-	*x = IPPrefix{}
+func (x *IPv6Prefix) Reset() {
+	*x = IPv6Prefix{}
 	mi := &file_siit_v1alpha1_siit_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *IPPrefix) String() string {
+func (x *IPv6Prefix) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*IPPrefix) ProtoMessage() {}
+func (*IPv6Prefix) ProtoMessage() {}
 
-func (x *IPPrefix) ProtoReflect() protoreflect.Message {
+func (x *IPv6Prefix) ProtoReflect() protoreflect.Message {
 	mi := &file_siit_v1alpha1_siit_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -452,53 +452,45 @@ func (x *IPPrefix) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use IPPrefix.ProtoReflect.Descriptor instead.
-func (*IPPrefix) Descriptor() ([]byte, []int) {
+// Deprecated: Use IPv6Prefix.ProtoReflect.Descriptor instead.
+func (*IPv6Prefix) Descriptor() ([]byte, []int) {
 	return file_siit_v1alpha1_siit_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *IPPrefix) GetIp() *IPAddress {
+func (x *IPv6Prefix) GetPrefix() string {
 	if x != nil {
-		return x.Ip
+		return x.Prefix
 	}
-	return nil
-}
-
-func (x *IPPrefix) GetPrefixLen() uint32 {
-	if x != nil {
-		return x.PrefixLen
-	}
-	return 0
+	return ""
 }
 
 var File_siit_v1alpha1_siit_proto protoreflect.FileDescriptor
 
 const file_siit_v1alpha1_siit_proto_rawDesc = "" +
 	"\n" +
-	"\x18siit/v1alpha1/siit.proto\x12\rsiit.v1alpha1\":\n" +
-	"\vListRequest\x12+\n" +
-	"\x04pool\x18\x01 \x01(\v2\x17.siit.v1alpha1.IPPrefixR\x04pool\"B\n" +
+	"\x18siit/v1alpha1/siit.proto\x12\rsiit.v1alpha1\x1a\x1bbuf/validate/validate.proto\"<\n" +
+	"\vListRequest\x12-\n" +
+	"\x04pool\x18\x01 \x01(\v2\x19.siit.v1alpha1.IPv6PrefixR\x04pool\"B\n" +
 	"\fListResponse\x122\n" +
-	"\aentries\x18\x01 \x03(\v2\x18.siit.v1alpha1.EAMTEntryR\aentries\"l\n" +
-	"\rCreateRequest\x12+\n" +
-	"\x04pool\x18\x01 \x01(\v2\x17.siit.v1alpha1.IPPrefixR\x04pool\x12.\n" +
+	"\aentries\x18\x01 \x03(\v2\x18.siit.v1alpha1.EAMTEntryR\aentries\"n\n" +
+	"\rCreateRequest\x12-\n" +
+	"\x04pool\x18\x01 \x01(\v2\x19.siit.v1alpha1.IPv6PrefixR\x04pool\x12.\n" +
 	"\x05entry\x18\x02 \x01(\v2\x18.siit.v1alpha1.EAMTEntryR\x05entry\"\x10\n" +
-	"\x0eCreateResponse\"l\n" +
-	"\rDeleteRequest\x12+\n" +
-	"\x04pool\x18\x01 \x01(\v2\x17.siit.v1alpha1.IPPrefixR\x04pool\x12.\n" +
+	"\x0eCreateResponse\"n\n" +
+	"\rDeleteRequest\x12-\n" +
+	"\x04pool\x18\x01 \x01(\v2\x19.siit.v1alpha1.IPv6PrefixR\x04pool\x12.\n" +
 	"\x05entry\x18\x02 \x01(\v2\x18.siit.v1alpha1.EAMTEntryR\x05entry\"\x10\n" +
 	"\x0eDeleteResponse\"g\n" +
 	"\tEAMTEntry\x12,\n" +
 	"\x04ipv4\x18\x01 \x01(\v2\x18.siit.v1alpha1.IPAddressR\x04ipv4\x12,\n" +
-	"\x04ipv6\x18\x02 \x01(\v2\x18.siit.v1alpha1.IPAddressR\x04ipv6\"=\n" +
-	"\tIPAddress\x12\x14\n" +
-	"\x04ipv4\x18\x01 \x01(\tH\x00R\x04ipv4\x12\x14\n" +
-	"\x04ipv6\x18\x02 \x01(\tH\x00R\x04ipv6B\x04\n" +
-	"\x02ip\"S\n" +
-	"\bIPPrefix\x12(\n" +
-	"\x02ip\x18\x01 \x01(\v2\x18.siit.v1alpha1.IPAddressR\x02ip\x12\x1d\n" +
+	"\x04ipv6\x18\x02 \x01(\v2\x18.siit.v1alpha1.IPAddressR\x04ipv6\"P\n" +
+	"\tIPAddress\x12\x1d\n" +
+	"\x04ipv4\x18\x01 \x01(\tB\a\xbaH\x04r\x02x\x01H\x00R\x04ipv4\x12\x1e\n" +
+	"\x04ipv6\x18\x02 \x01(\tB\b\xbaH\x05r\x03\x80\x01\x01H\x00R\x04ipv6B\x04\n" +
+	"\x02ip\".\n" +
 	"\n" +
-	"prefix_len\x18\x03 \x01(\rR\tprefixLen2\xe2\x01\n" +
+	"IPv6Prefix\x12 \n" +
+	"\x06prefix\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xf8\x01\x01R\x06prefix2\xe2\x01\n" +
 	"\vEAMTService\x12A\n" +
 	"\x04List\x12\x1a.siit.v1alpha1.ListRequest\x1a\x1b.siit.v1alpha1.ListResponse\"\x00\x12G\n" +
 	"\x06Create\x12\x1c.siit.v1alpha1.CreateRequest\x1a\x1d.siit.v1alpha1.CreateResponse\"\x00\x12G\n" +
@@ -527,29 +519,28 @@ var file_siit_v1alpha1_siit_proto_goTypes = []any{
 	(*DeleteResponse)(nil), // 5: siit.v1alpha1.DeleteResponse
 	(*EAMTEntry)(nil),      // 6: siit.v1alpha1.EAMTEntry
 	(*IPAddress)(nil),      // 7: siit.v1alpha1.IPAddress
-	(*IPPrefix)(nil),       // 8: siit.v1alpha1.IPPrefix
+	(*IPv6Prefix)(nil),     // 8: siit.v1alpha1.IPv6Prefix
 }
 var file_siit_v1alpha1_siit_proto_depIdxs = []int32{
-	8,  // 0: siit.v1alpha1.ListRequest.pool:type_name -> siit.v1alpha1.IPPrefix
+	8,  // 0: siit.v1alpha1.ListRequest.pool:type_name -> siit.v1alpha1.IPv6Prefix
 	6,  // 1: siit.v1alpha1.ListResponse.entries:type_name -> siit.v1alpha1.EAMTEntry
-	8,  // 2: siit.v1alpha1.CreateRequest.pool:type_name -> siit.v1alpha1.IPPrefix
+	8,  // 2: siit.v1alpha1.CreateRequest.pool:type_name -> siit.v1alpha1.IPv6Prefix
 	6,  // 3: siit.v1alpha1.CreateRequest.entry:type_name -> siit.v1alpha1.EAMTEntry
-	8,  // 4: siit.v1alpha1.DeleteRequest.pool:type_name -> siit.v1alpha1.IPPrefix
+	8,  // 4: siit.v1alpha1.DeleteRequest.pool:type_name -> siit.v1alpha1.IPv6Prefix
 	6,  // 5: siit.v1alpha1.DeleteRequest.entry:type_name -> siit.v1alpha1.EAMTEntry
 	7,  // 6: siit.v1alpha1.EAMTEntry.ipv4:type_name -> siit.v1alpha1.IPAddress
 	7,  // 7: siit.v1alpha1.EAMTEntry.ipv6:type_name -> siit.v1alpha1.IPAddress
-	7,  // 8: siit.v1alpha1.IPPrefix.ip:type_name -> siit.v1alpha1.IPAddress
-	0,  // 9: siit.v1alpha1.EAMTService.List:input_type -> siit.v1alpha1.ListRequest
-	2,  // 10: siit.v1alpha1.EAMTService.Create:input_type -> siit.v1alpha1.CreateRequest
-	4,  // 11: siit.v1alpha1.EAMTService.Delete:input_type -> siit.v1alpha1.DeleteRequest
-	1,  // 12: siit.v1alpha1.EAMTService.List:output_type -> siit.v1alpha1.ListResponse
-	3,  // 13: siit.v1alpha1.EAMTService.Create:output_type -> siit.v1alpha1.CreateResponse
-	5,  // 14: siit.v1alpha1.EAMTService.Delete:output_type -> siit.v1alpha1.DeleteResponse
-	12, // [12:15] is the sub-list for method output_type
-	9,  // [9:12] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	0,  // 8: siit.v1alpha1.EAMTService.List:input_type -> siit.v1alpha1.ListRequest
+	2,  // 9: siit.v1alpha1.EAMTService.Create:input_type -> siit.v1alpha1.CreateRequest
+	4,  // 10: siit.v1alpha1.EAMTService.Delete:input_type -> siit.v1alpha1.DeleteRequest
+	1,  // 11: siit.v1alpha1.EAMTService.List:output_type -> siit.v1alpha1.ListResponse
+	3,  // 12: siit.v1alpha1.EAMTService.Create:output_type -> siit.v1alpha1.CreateResponse
+	5,  // 13: siit.v1alpha1.EAMTService.Delete:output_type -> siit.v1alpha1.DeleteResponse
+	11, // [11:14] is the sub-list for method output_type
+	8,  // [8:11] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_siit_v1alpha1_siit_proto_init() }

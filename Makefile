@@ -10,12 +10,21 @@ build:
 	CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o siit-bin ./cmd
 
 NETNS ?=
+DEVELOPMENT ?= false
+GRPC_REFLECTION ?= false
+TCPADDR ?= ""
+
+ifeq ($(DEVELOPMENT),true)
+TCPADDR = 0.0.0.0:9999
+GRPC_REFLECTION = true
+endif
+
 run:
 ifneq ($(NETNS),)
 	@echo "running manager in network namespace $(NETNS)"
 	@ip netns exec $(NETNS) $(MAKE) NETNS= run
 endif
-	./siit-bin -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2
+	./siit-bin -pool=64:ff9b:dead:beef::/96 -ipv4=10.0.0.5 -ipv6=fd00::2 -tcp-addr=$(TCPADDR) -grpc-reflection=$(GRPC_REFLECTION)
 
 
 ebpf-test:
@@ -44,6 +53,9 @@ generate-linux-headers:
 	# cp -R /tmp/linux/usr/include/asm-generic $(INCLUDE_FOLDER)
 	rm -r linuxkit
 
+
+grpcui:
+	grpcui -plaintext localhost:9999
 
 ### Testbed
 

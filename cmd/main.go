@@ -15,9 +15,11 @@ import (
 )
 
 var (
-	ipv4 = flag.String("ipv4", "", "ipv4 address to map to ipv6")
-	ipv6 = flag.String("ipv6", "", "ipv6 address")
-	pool = flag.String("pool", "", "pool used for address translation")
+	ipv4           = flag.String("ipv4", "", "ipv4 address to map to ipv6")
+	ipv6           = flag.String("ipv6", "", "ipv6 address")
+	pool           = flag.String("pool", "", "pool used for address translation")
+	grpcReflection = flag.Bool("grpc-reflection", false, "enable grpc reflection")
+	tcpAddr        = flag.String("tcp-addr", "", "serve API on tcp address rather than unix socket")
 )
 
 func main() {
@@ -48,7 +50,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a, err := api.New(manager)
+	opts := []api.Option{}
+	if *grpcReflection {
+		opts = append(opts, api.WithReflection())
+	}
+	if *tcpAddr != "" {
+		opts = append(opts, api.WithTCPListener(*tcpAddr))
+	}
+
+	a, err := api.New(manager, opts...)
 	if err != nil {
 		log.Fatal("setup API", err)
 	}

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package siit.v1alpha1;
 
+import "buf/validate/validate.proto";
+
 option go_package = "github.com/hown3d/siit-ebpf/pkg/apis/siit/v1alpha1";
 
 service EAMTService {
@@ -11,7 +13,7 @@ service EAMTService {
 }
 
 message ListRequest {
-  IPPrefix pool = 1;
+  IPv6Prefix pool = 1;
 }
 
 message ListResponse {
@@ -19,14 +21,14 @@ message ListResponse {
 }
 
 message CreateRequest {
-  IPPrefix pool = 1;
+  IPv6Prefix pool = 1;
   EAMTEntry entry = 2;
 }
 
 message CreateResponse {}
 
 message DeleteRequest {
-  IPPrefix pool = 1;
+  IPv6Prefix pool = 1;
   EAMTEntry entry = 2;
 }
 
@@ -39,12 +41,11 @@ message EAMTEntry {
 
 message IPAddress {
   oneof ip {
-    string ipv4 = 1;
-    string ipv6 = 2;
+    string ipv4 = 1 [(buf.validate.field).string.ipv4 = true];
+    string ipv6 = 2 [(buf.validate.field).string.ipv6 = true];
   }
 }
 
-message IPPrefix {
-  IPAddress ip = 1;
-  uint32 prefix_len = 3;
+message IPv6Prefix {
+  string prefix = 1 [(buf.validate.field).string.ipv6_prefix = true];
 }

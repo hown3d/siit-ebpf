@@ -6,6 +6,7 @@ tool github.com/cilium/ebpf/cmd/bpf2go
 
 require (
 	connectrpc.com/connect v1.19.1
+	connectrpc.com/grpcreflect v1.3.0
 	connectrpc.com/validate v0.6.0
 	github.com/cilium/ebpf v0.20.0
 	github.com/go-logr/logr v1.4.3
