@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/cilium/ebpf"
+	"github.com/go-logr/logr/testr"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/hown3d/siit-ebpf/internal/bpf/testutil"
@@ -28,7 +30,7 @@ func TestManager_Siit46(t *testing.T) {
 		t.Fatalf("creating kernel trace reader: %s", err)
 	}
 
-	m, err := NewManager(testPrefix)
+	m, err := NewManager(testr.New(t), testPrefix)
 	if err != nil {
 		t.Fatalf("setup ebpf manager: %s", err)
 	}
@@ -44,18 +46,28 @@ func TestManager_Siit46(t *testing.T) {
 	src := netip.MustParseAddr("10.0.2.1")
 	expectedNewDst := netip.MustParseAddr("2001:db8::68")
 	dst := netip.MustParseAddr("10.0.4.2")
+	v4Mac := must(t, mac.GenerateRandMAC)
+	v6Mac := must(t, mac.GenerateRandMAC)
+	dstMac := must(t, mac.GenerateRandMAC)
 
-	in, err := ipv4Packet(src, dst)
-	if err != nil {
-		t.Fatalf("building ipv4 packet: %s", err)
+	srcInfo := packetInfo{
+		mac: must(t, mac.GenerateRandMAC),
+		ip:  src,
+	}
+	dstInfo := packetInfo{
+		mac: dstMac,
+		ip:  dst,
 	}
 
 	ns, err := netns.New()
 	if err != nil {
 		t.Fatalf("creating network namespace: %s", err)
 	}
-	v4Mac := must(t, mac.GenerateRandMAC)
-	v6Mac := must(t, mac.GenerateRandMAC)
+
+	in, err := ipv4Packet(srcInfo, dstInfo)
+	if err != nil {
+		t.Fatalf("building ipv4 packet: %s", err)
+	}
 
 	v4Link := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{
@@ -72,8 +84,8 @@ func TestManager_Siit46(t *testing.T) {
 	}
 
 	var (
-		outData []byte
-		ret     uint32
+		packet gopacket.Packet
+		ret    uint32
 	)
 	if err := ns.Do(
 		func() error {
@@ -87,25 +99,12 @@ func TestManager_Siit46(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if err := setupTestLink(v4Link); err != nil {
+			if err := setupTestLink(v4Link, dst); err != nil {
 				return fmt.Errorf("setup v4 link: %w", err)
 			}
-			if err := setupTestLink(v6Link); err != nil {
+			if err := setupTestLink(v6Link, expectedNewDst); err != nil {
 				return fmt.Errorf("setup v6 link: %w", err)
 			}
-
-			// v6Route := &netlink.Route{
-			// 	Family:    netlink.FAMILY_V6,
-			// 	LinkIndex: v6Link.Index,
-			// 	Dst: &net.IPNet{
-			// 		IP:   testPrefix.Addr().AsSlice(),
-			// 		Mask: net.CIDRMask(testPrefix.Bits(), testPrefix.Addr().BitLen()),
-			// 	},
-			// }
-			// t.Logf("setup v6 route: %s", v6Route)
-			// if err := netlink.RouteAdd(v6Route); err != nil {
-			// 	return fmt.Errorf("setup v6 route: %w", err)
-			// }
 
 			if err := logRoutes(t, netlink.FAMILY_V6); err != nil {
 				return fmt.Errorf("logging ipv6 routes: %w", err)
@@ -115,7 +114,12 @@ func TestManager_Siit46(t *testing.T) {
 				return fmt.Errorf("logging ipv6 routes: %w", err)
 			}
 
-			ret, outData, err = m.bpfObjs.Siit.Test(in)
+			hostLink, err := netlink.LinkByName(SecondHostDevice)
+			if err != nil {
+				return fmt.Errorf("getting host link: %w", err)
+			}
+
+			ret, packet, err = testEbpf(m.bpfObjs.Siit, in, uint32(hostLink.Attrs().Index))
 			if err != nil {
 				t.Fatalf("testing ebpf program: %s", err)
 			}
@@ -136,9 +140,6 @@ func TestManager_Siit46(t *testing.T) {
 		t.Logf("ebpf program traces:\n%s", traces)
 	}
 
-	packet := testutil.DecodePacket(outData)
-	t.Log("ebpf program ran, printing packet")
-	t.Log(packet.Dump())
 	if ret != TC_ACT_OK {
 		t.Fatalf("ebpf program returned code != TC_ACT_OK: %d", ret)
 	}
@@ -172,26 +173,20 @@ func TestManager_Siit46(t *testing.T) {
 	}
 }
 
-func ipv4Packet(src, dst netip.Addr) ([]byte, error) {
-	srcMac, err := net.ParseMAC("00:11:22:33:44:55")
-	if err != nil {
-		return nil, err
-	}
-	dstMac, err := net.ParseMAC("66:77:88:99:AA:BB")
-	if err != nil {
-		return nil, err
-	}
+type packetInfo struct {
+	mac net.HardwareAddr
+	ip  netip.Addr
+}
 
+func ipv4Packet(src, dst packetInfo) ([]byte, error) {
 	eth := &layers.Ethernet{
-		// irrelevant, just to fill packet
-		SrcMAC: srcMac,
-		// irrelevant, just to fill packet
-		DstMAC:       dstMac,
+		SrcMAC:       src.mac,
+		DstMAC:       dst.mac,
 		EthernetType: layers.EthernetTypeIPv4,
 	}
 	ipv4 := &layers.IPv4{
-		SrcIP:    src.AsSlice(),
-		DstIP:    dst.AsSlice(),
+		SrcIP:    src.ip.AsSlice(),
+		DstIP:    dst.ip.AsSlice(),
 		Protocol: layers.IPProtocolTCP,
 		Version:  4,
 		// Don't fragment
@@ -208,26 +203,15 @@ func ipv4Packet(src, dst netip.Addr) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func ipv6Packet(src, dst netip.Addr) ([]byte, error) {
-	srcMac, err := net.ParseMAC("00:11:22:33:44:55")
-	if err != nil {
-		return nil, err
-	}
-	dstMac, err := net.ParseMAC("66:77:88:99:AA:BB")
-	if err != nil {
-		return nil, err
-	}
-
+func ipv6Packet(src, dst packetInfo) ([]byte, error) {
 	eth := &layers.Ethernet{
-		// irrelevant, just to fill packet
-		SrcMAC: srcMac,
-		// irrelevant, just to fill packet
-		DstMAC:       dstMac,
+		SrcMAC:       src.mac,
+		DstMAC:       dst.mac,
 		EthernetType: layers.EthernetTypeIPv6,
 	}
 	ipv6 := &layers.IPv6{
-		SrcIP:   src.AsSlice(),
-		DstIP:   dst.AsSlice(),
+		SrcIP:   src.ip.AsSlice(),
+		DstIP:   dst.ip.AsSlice(),
 		Version: 6,
 	}
 	tcp := &layers.TCP{}
@@ -241,12 +225,46 @@ func ipv6Packet(src, dst netip.Addr) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func setupTestLink(l netlink.Link) error {
+func testEbpf(prog *ebpf.Program, in []byte, ifindex uint32) (uint32, gopacket.Packet, error) {
+	const (
+		// Number of bytes to pad the output buffer for BPF_PROG_TEST_RUN.
+		// This is currently the maximum of spare space allocated for SKB
+		// and XDP programs, and equal to XDP_PACKET_HEADROOM + NET_IP_ALIGN.
+		outputPad = 256 + 2
+	)
+
+	out := make([]byte, len(in)+outputPad)
+	skbuff := skBuff{
+		ifindex: ifindex,
+	}
+	opts := &ebpf.RunOptions{
+		Data:    in,
+		DataOut: out,
+		Context: skbuff,
+	}
+
+	ret, err := prog.Run(opts)
+	if err != nil {
+		return 0, nil, err
+	}
+	packet := testutil.DecodePacket(opts.DataOut)
+	return ret, packet, nil
+}
+
+func setupTestLink(l netlink.Link, addr netip.Addr) error {
 	if err := netlink.LinkAdd(l); err != nil {
 		return err
 	}
 	if err := netlink.LinkSetUp(l); err != nil {
 		return fmt.Errorf("failed to set link up: %w", err)
+	}
+
+	linkAddr, err := netlink.ParseAddr(fmt.Sprintf("%s/%d", addr.String(), 32))
+	if err != nil {
+		return err
+	}
+	if err := netlink.AddrAdd(l, linkAddr); err != nil {
+		return err
 	}
 
 	return enableForwarding(l)

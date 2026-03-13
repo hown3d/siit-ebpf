@@ -939,6 +939,9 @@ int siit(struct __sk_buff *skb) {
     return TC_ACT_SHOT;
   }
 
+#ifdef DEBUG
+  bpf_printk("translating packet recieved on ifindex %d", skb->ifindex);
+#endif
   return translate(skb, eth);
 }
 

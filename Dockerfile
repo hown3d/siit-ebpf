@@ -1,12 +1,11 @@
 ARG BASE_IMAGE=cgr.dev/chainguard/glibc-dynamic:latest-dev
 FROM ${BASE_IMAGE} as base
-FROM debian:sid AS deps
+FROM golang:1.25 AS deps
 
 ARG TARGETARCH
 
 RUN apt-get update
 RUN apt-get install -y clang llvm-dev libbpf-dev linux-headers-generic 
-RUN apt-get install -y golang
 
 WORKDIR /work
 COPY go.mod go.sum ./

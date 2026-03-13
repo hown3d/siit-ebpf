@@ -1,4 +1,6 @@
-KERNEL_VERSION = "6.6.13"
+export KERNEL_VERSION = 6.16.0
+export ARCH = $(shell uname -m)
+
 INCLUDE_FOLDER = "internal/bpf/siit/include"
 generate: go-generate
 
@@ -34,8 +36,10 @@ generate-btf-headers:
 	docker build -t bpftool https://github.com/libbpf/bpftool.git#main
 	docker run bpftool btf dump file /sys/kernel/btf/vmlinux format c > $(INCLUDE_FOLDER)/vmlinux.h
 
-generate-libbpf-headers:
-	docker build -f Dockerfile.libbpf -t libbpf .
+build-libbpf-image:
+	docker build -f Dockerfile.libbpf --platform=linux/$(ARCH) -t libbpf .
+
+generate-libbpf-headers: build-libbpf-image
 	docker create --name libbpf libbpf
 	docker cp libbpf:/usr/include/bpf $(INCLUDE_FOLDER)
 	docker rm -f libbpf
@@ -53,6 +57,8 @@ generate-linux-headers:
 	# cp -R /tmp/linux/usr/include/asm-generic $(INCLUDE_FOLDER)
 	rm -r linuxkit
 
+generate-vmlinux-btf: build-libbpf-image
+	./hack/vmlinux.btf.sh
 
 grpcui:
 	grpcui -plaintext localhost:9999

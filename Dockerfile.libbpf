@@ -1,3 +1,16 @@
 FROM debian
 
-RUN apt-get update && apt-get install -y libbpf-dev
+RUN apt-get update 
+RUN apt-get -y --no-install-recommends install \
+  make git gawk \
+  libbpf-dev \
+  curl \
+  file \
+  clang-format \
+  clang llvm \ 
+  ca-certificates \
+  && \
+  rm -rf /var/lib/apt/lists/*
+
+RUN curl -fL "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/scripts/extract-vmlinux" -o "/usr/local/bin/extract-vmlinux" && \
+  chmod +x /usr/local/bin/extract-vmlinux

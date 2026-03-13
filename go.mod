@@ -2,7 +2,10 @@ module github.com/hown3d/siit-ebpf
 
 go 1.25.3
 
-tool github.com/cilium/ebpf/cmd/bpf2go
+tool (
+	github.com/cilium/ebpf/cmd/bpf2go
+	github.com/hown3d/siit-ebpf/internal/bpf/testdata/gentypes
+)
 
 require (
 	connectrpc.com/connect v1.19.1
