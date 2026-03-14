@@ -54,6 +54,12 @@ $ make tcpdump # can be run inside network namespaces with ip netns exec <ns_rou
 $ make pwru
 ```
 
+You can debug fib_lookups of the kernel using a provided bpftrace script:
+
+```
+sudo bpftrace ./internal/bpf/testutil/fib_lookup_trace.bpftrace.d
+```
+
 ### Tests
 
 Integration tests for the ebpf program are located at [./internal/bpf/bpf_test.go](./internal/bpf/bpf_test.go)

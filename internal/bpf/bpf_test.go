@@ -17,12 +17,13 @@ import (
 	"github.com/hown3d/siit-ebpf/internal/bpf/testutil"
 	"github.com/hown3d/siit-ebpf/internal/mac"
 	"github.com/hown3d/siit-ebpf/internal/netns"
+	"github.com/hown3d/siit-ebpf/internal/sysctl"
 	"github.com/vishvananda/netlink"
 )
 
 const TC_ACT_OK = 0x0
 
-var testPrefix = netip.MustParsePrefix("2001:db8:cafe::/96")
+var testPrefix = netip.MustParsePrefix("64:ff9b:dead:beef::/96")
 
 func TestManager_Siit46(t *testing.T) {
 	kernelTraceReader, err := testutil.KernelTraceReader()
@@ -44,7 +45,7 @@ func TestManager_Siit46(t *testing.T) {
 	})
 
 	src := netip.MustParseAddr("10.0.2.1")
-	expectedNewDst := netip.MustParseAddr("2001:db8::68")
+	expectedNewDst := netip.MustParseAddr("fd00::2")
 	dst := netip.MustParseAddr("10.0.4.2")
 	v4Mac := must(t, mac.GenerateRandMAC)
 	v6Mac := must(t, mac.GenerateRandMAC)
@@ -99,7 +100,14 @@ func TestManager_Siit46(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if err := setupTestLink(v4Link, dst); err != nil {
+
+			if err := sysctl.ApplySettings([]sysctl.Sysctl{{
+				Name: []string{"net", "ipv4", "ip_forward"},
+				Val:  "1",
+			}}); err != nil {
+				return fmt.Errorf("applying ip_forwarding sysctl: %w", err)
+			}
+			if err := setupTestLink(v4Link, src); err != nil {
 				return fmt.Errorf("setup v4 link: %w", err)
 			}
 			if err := setupTestLink(v6Link, expectedNewDst); err != nil {
