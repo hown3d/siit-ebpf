@@ -212,7 +212,7 @@ func (m *Manager) SetupLinks() error {
 		},
 	}); err != nil {
 		if !os.IsExist(err) {
-			return err
+			return fmt.Errorf("add pool route: %w", err)
 		}
 	}
 

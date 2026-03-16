@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 
 	"github.com/google/gopacket"
@@ -27,6 +28,19 @@ func IPsFromFlow(flow gopacket.Flow) (src, dst netip.Addr, err error) {
 	return
 }
 
+func MacsFromFlow(flow gopacket.Flow) (src, dst net.HardwareAddr, err error) {
+	srcEp, dstEp := flow.Endpoints()
+	src, err = macFromEndpoint(srcEp)
+	if err != nil {
+		return src, dst, err
+	}
+	dst, err = macFromEndpoint(dstEp)
+	if err != nil {
+		return src, dst, err
+	}
+	return
+}
+
 func ipFromEndpoint(ep gopacket.Endpoint) (netip.Addr, error) {
 	switch t := ep.EndpointType(); t {
 	case layers.EndpointIPv4:
@@ -36,4 +50,11 @@ func ipFromEndpoint(ep gopacket.Endpoint) (netip.Addr, error) {
 	default:
 		return netip.Addr{}, fmt.Errorf("endpoint %s has unknown endpoint type: %s", ep, t)
 	}
+}
+
+func macFromEndpoint(ep gopacket.Endpoint) (net.HardwareAddr, error) {
+	if ep.EndpointType() == layers.EndpointMAC {
+		return net.HardwareAddr(ep.Raw()), nil
+	}
+	return nil, fmt.Errorf("endpoint %s has unknown endpoint type: %s", ep, ep.EndpointType())
 }
