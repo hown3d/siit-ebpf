@@ -63,8 +63,12 @@ func setupVethPair(name, peerName string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get link by name %s: %w", name, err)
 		}
+
+		if err := netlink.LinkSetUp(l); err != nil {
+			return fmt.Errorf("failed to set link %s up: %w", l.Attrs().Name, err)
+		}
 		if err := enableForwarding(l); err != nil {
-			return fmt.Errorf("failed to enable forwarding on link: %w", err)
+			return fmt.Errorf("failed to enable forwarding on link %s: %w", l.Attrs().Name, err)
 		}
 	}
 
@@ -73,10 +77,6 @@ func setupVethPair(name, peerName string) error {
 
 func enableForwarding(link netlink.Link) error {
 	ifName := link.Attrs().Name
-
-	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("failed to set link up: %w", err)
-	}
 
 	sysSettings := []sysctl.Sysctl{
 		{Name: []string{"net", "ipv6", "conf", ifName, "forwarding"}, Val: "1", IgnoreErr: false},

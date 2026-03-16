@@ -863,6 +863,7 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   int fib_ret = -1;
   __u32 new_ifindex = 0;
   if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
+    bpf_printk("fib_lookup_v6 for src=%pI6, dst=%pI6", &ip6.saddr, &ip6.daddr);
     fib_ret = fib_lookup_v6(skb, &eth, &ip6, &new_ifindex);
     if (fib_ret < 0) {
       bpf_printk("fib_lookup_v6 failed with code %d", fib_ret);
@@ -881,6 +882,7 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
     }
   }
   if (eth.h_proto == bpf_htons(ETH_P_IP)) {
+    bpf_printk("fib_lookup_v6 for src=%pI4, dst=%pI4", &ip4.saddr, &ip4.daddr);
     fib_ret = fib_lookup_v4(skb, &eth, &ip4, &new_ifindex);
     if (fib_ret < 0) {
       bpf_printk("fib_lookup_v4 failed with code %d", fib_ret);
@@ -939,6 +941,9 @@ int siit(struct __sk_buff *skb) {
     return TC_ACT_SHOT;
   }
 
+#ifdef DEBUG
+  bpf_printk("translating packet recieved on ifindex %d", skb->ifindex);
+#endif
   return translate(skb, eth);
 }
 

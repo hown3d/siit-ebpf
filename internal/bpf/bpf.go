@@ -50,14 +50,15 @@ func ensureClsact(links ...netlink.Link) error {
 	return err
 }
 
-func attachProgToFilter(l netlink.Link, prog *ebpf.Program) error {
+func (m *Manager) attachProgToFilter(l netlink.Link, prog *ebpf.Program) error {
+	log := m.log.WithValues("program", prog.String())
 	var progName string
 	progInfo, err := prog.Info()
 	if err == nil {
 		progName = progInfo.Name
 	}
 
-	klog.Infof("attaching program as tcx")
+	log.Info("attaching program as tcx")
 	// Attach using tcx if available. This is seamless on interfaces with
 	// existing tc programs since attaching tcx disables legacy tc evaluation.
 	err = upsertTCXProgram(l, prog)
@@ -70,9 +71,9 @@ func attachProgToFilter(l netlink.Link, prog *ebpf.Program) error {
 		return fmt.Errorf("attaching tcx program %s: %w", progName, err)
 	}
 
-	klog.Infof("fallback to attaching program as tc")
+	log.Info("fallback to attaching program as tc")
 	// tcx not available or disabled, fall back to legacy tc.
-	if err := upsertTCProgram(l, prog, progName, 1); err != nil {
+	if err := upsertTCProgram(log, l, prog, progName, 1); err != nil {
 		return fmt.Errorf("attaching legacy tc program %s: %w", progName, err)
 	}
 	return nil
@@ -96,7 +97,7 @@ func upsertTCXProgram(device netlink.Link, prog *ebpf.Program) error {
 	return nil
 }
 
-func upsertTCProgram(device netlink.Link, prog *ebpf.Program, progName string, prio uint16) error {
+func upsertTCProgram(log logr.Logger, device netlink.Link, prog *ebpf.Program, progName string, prio uint16) error {
 	filter := &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
 			LinkIndex: device.Attrs().Index,
@@ -111,7 +112,7 @@ func upsertTCProgram(device netlink.Link, prog *ebpf.Program, progName string, p
 	}
 
 	if err := netlink.FilterAdd(filter); err != nil {
-		klog.Infof("filter %s already exist on interface %s, trying to replacing it ...", filter.Name, device)
+		log.Info(fmt.Sprintf("filter %s already exist on interface %s, trying to replacing it ...", filter.Name, device))
 		// it may already exist, try to replace it
 		if err := netlink.FilterReplace(filter); err != nil {
 			return fmt.Errorf("replacing tc filter for interface %s: %w", device.Attrs().Name, err)
@@ -138,7 +139,7 @@ var forbiddenPools = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),
 }
 
-func NewManager(pool netip.Prefix) (*Manager, error) {
+func NewManager(log logr.Logger, pool netip.Prefix) (*Manager, error) {
 	if pool.Bits() != 96 {
 		return nil, errors.New("nat64Prefix must be /96")
 	}
@@ -175,7 +176,7 @@ func NewManager(pool netip.Prefix) (*Manager, error) {
 	}
 
 	return &Manager{
-		log:     klog.NewKlogr().WithName("manager"),
+		log:     log,
 		bpfObjs: &objs,
 		pool:    pool,
 		ip6Map:  newIP6Map(objs.Ipv6AddressMappings),
@@ -199,7 +200,7 @@ func (m *Manager) SetupLinks() error {
 
 	for _, l := range []netlink.Link{hostDev, peerDev} {
 		klog.Infof("adding eBPF siit prog to the interface %s", l.Attrs().Name)
-		if err := attachProgToFilter(l, m.bpfObjs.Siit); err != nil {
+		if err := m.attachProgToFilter(l, m.bpfObjs.Siit); err != nil {
 			return fmt.Errorf("error attaching program to interface %s: %w", l.Attrs().Name, err)
 		}
 	}
@@ -211,7 +212,7 @@ func (m *Manager) SetupLinks() error {
 		},
 	}); err != nil {
 		if !os.IsExist(err) {
-			return err
+			return fmt.Errorf("add pool route: %w", err)
 		}
 	}
 
