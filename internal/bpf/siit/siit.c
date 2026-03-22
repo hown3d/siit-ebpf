@@ -829,7 +829,7 @@ static int __always_inline translate(struct __sk_buff *skb, struct ethhdr eth) {
   struct ipv6hdr ip6 = {};
   struct iphdr ip4 = {};
   int ip_offset = sizeof(struct ethhdr);
-  switch (bpf_htons(skb->protocol)) {
+  switch (eth.h_proto) {
   case ETH_P_IP:
     eth.h_proto = bpf_htons(ETH_P_IPV6);
     ret = ip4_to_ip6(skb, &ip6, ip_offset);

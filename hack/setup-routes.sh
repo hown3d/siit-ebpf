@@ -2,6 +2,7 @@
 
 # Testbed setup for SIIT (Stateless IP/ICMP Translation) eBPF program
 set -o nounset
+set -eo pipefail
 
 client_ip=10.0.0.2
 server_ip=fd00::2

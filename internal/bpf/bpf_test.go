@@ -18,6 +18,7 @@ import (
 	"github.com/hown3d/siit-ebpf/internal/mac"
 	"github.com/hown3d/siit-ebpf/internal/netns"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -64,7 +65,8 @@ func TestManager_Siit46(t *testing.T) {
 		ip:  src,
 	}
 	dstInfo := packetInfo{
-		ip: dst,
+		ip:  dst,
+		mac: dstMac,
 	}
 
 	routerns, err := netns.New()
@@ -172,7 +174,15 @@ func TestManager_Siit46(t *testing.T) {
 			}
 
 			// TODO: at the moment fib_lookup returns BPF_FIB_LKUP_RET_NO_NEIGH because they kernel does not know about the Mac of expectedNewDst yet.
-			// Create this entry in the neighbour table directly using netlink.NeighAdd.
+			// Create this entry in the neighbor table directly using netlink.NeighAdd.
+			if err := netlink.NeighAdd(&netlink.Neigh{
+				LinkIndex:    v6Link.Index,
+				IP:           expectedNewDst.AsSlice(),
+				HardwareAddr: v6PeerMac,
+				State:        unix.NUD_REACHABLE,
+			}); err != nil {
+				return fmt.Errorf("adding neighbour for server entry: %w", err)
+			}
 
 			ret, packet, _, err = testEbpf(m.bpfObjs.Siit, in, uint32(hostLink.Attrs().Index))
 			if err != nil {
